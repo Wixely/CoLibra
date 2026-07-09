@@ -60,6 +60,36 @@ internal sealed partial class CoLibraNode : ICoLibraRouter
         return new HandlerRegistration(this, type);
     }
 
+    IAsyncDisposable ICoLibraRouter.RegisterHandler<T>(
+        string type, Func<RoutedDelivery<T>, CancellationToken, ValueTask> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        var serializer = _options.Routing.PayloadSerializer;
+        return ((ICoLibraRouter)this).RegisterHandler(type, (delivery, ct) =>
+        {
+            // A deserialization failure surfaces like a handler exception: logged, not re-sent
+            // (delivery was acknowledged; a payload that can't parse won't parse on retry either).
+            var value = serializer.Deserialize<T>(delivery.Payload)
+                ?? throw new InvalidDataException($"Routed payload for {delivery.Key} deserialized to null as {typeof(T).Name}.");
+            return handler(new RoutedDelivery<T>
+            {
+                Key = delivery.Key,
+                Value = value,
+                Origin = delivery.Origin,
+                Token = delivery.Token,
+            }, ct);
+        });
+    }
+
+    ValueTask<RouteResult> ICoLibraRouter.RouteAsync(
+        string type, string id, byte[] payload, CancellationToken cancellationToken) =>
+        ((ICoLibraRouter)this).RouteAsync(type, id, (ReadOnlyMemory<byte>)payload, cancellationToken);
+
+    ValueTask<RouteResult> ICoLibraRouter.RouteAsync<T>(
+        string type, string id, T value, CancellationToken cancellationToken) =>
+        ((ICoLibraRouter)this).RouteAsync(
+            type, id, (ReadOnlyMemory<byte>)_options.Routing.PayloadSerializer.Serialize(value), cancellationToken);
+
     /// <summary>Advertises handler changes on the next tick instead of waiting a full heartbeat.</summary>
     private void NudgeAdvertisement() =>
         Post(() =>

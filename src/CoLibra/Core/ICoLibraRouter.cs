@@ -1,4 +1,4 @@
-namespace CoLibra;
+﻿namespace CoLibra;
 
 /// <summary>
 /// Routed delivery (<see cref="RoutingOptions"/>): lets any node hand data to the cluster and
@@ -26,6 +26,41 @@ public interface ICoLibraRouter
     /// </summary>
     ValueTask<RouteResult> RouteAsync(string type, string id, ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Raw-bytes overload. Without it, a <c>byte[]</c> argument would bind to
+    /// <see cref="RouteAsync{T}(string, string, T, CancellationToken)"/> (exact generic match beats the implicit conversion to
+    /// <see cref="ReadOnlyMemory{T}"/>) and get needlessly serializer-wrapped.
+    /// </summary>
+    ValueTask<RouteResult> RouteAsync(string type, string id, byte[] payload,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Typed <see cref="RegisterHandler"/>: payloads are deserialized with
+    /// <see cref="RoutingOptions.PayloadSerializer"/> before reaching the handler. A payload
+    /// that fails to deserialize is logged and dropped (delivery was already acknowledged).
+    /// </summary>
+    IAsyncDisposable RegisterHandler<T>(string type, Func<RoutedDelivery<T>, CancellationToken, ValueTask> handler);
+
+    /// <summary>Typed <see cref="RouteAsync(string, string, ReadOnlyMemory{byte}, CancellationToken)"/>: serializes <paramref name="value"/> with <see cref="RoutingOptions.PayloadSerializer"/>.</summary>
+    ValueTask<RouteResult> RouteAsync<T>(string type, string id, T value,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>A typed payload delivered to this node because it owns (or was just assigned) the key.</summary>
+public sealed class RoutedDelivery<T>
+{
+    /// <summary>The key the payload was routed by.</summary>
+    public required LeaseKey Key { get; init; }
+
+    /// <summary>The deserialized payload.</summary>
+    public required T Value { get; init; }
+
+    /// <summary>The node that received the data from the outside world and routed it here.</summary>
+    public required NodeId Origin { get; init; }
+
+    /// <summary>This node's current fencing token for the key, for guarding external writes.</summary>
+    public required FencingToken Token { get; init; }
 }
 
 /// <summary>A payload delivered to this node because it owns (or was just assigned) the key.</summary>
@@ -34,7 +69,7 @@ public sealed class RoutedDelivery
     /// <summary>The key the payload was routed by.</summary>
     public required LeaseKey Key { get; init; }
 
-    /// <summary>The application payload, exactly as passed to <see cref="ICoLibraRouter.RouteAsync"/>.</summary>
+    /// <summary>The application payload, exactly as passed to <see cref="ICoLibraRouter.RouteAsync(string, string, ReadOnlyMemory{byte}, CancellationToken)"/>.</summary>
     public required ReadOnlyMemory<byte> Payload { get; init; }
 
     /// <summary>The node that received the data from the outside world and routed it here.</summary>
@@ -44,7 +79,7 @@ public sealed class RoutedDelivery
     public required FencingToken Token { get; init; }
 }
 
-/// <summary>Outcome of a <see cref="ICoLibraRouter.RouteAsync"/> call.</summary>
+/// <summary>Outcome of a <see cref="ICoLibraRouter.RouteAsync(string, string, ReadOnlyMemory{byte}, CancellationToken)"/> call.</summary>
 public enum RouteStatus
 {
     /// <summary>This node owns the key; the handler ran in-process.</summary>

@@ -237,4 +237,33 @@ public class RoutedDeliveryTests(ITestOutputHelper output) : IAsyncLifetime
         var result = await a.Router.RouteAsync("evt", "x", new byte[] { 1 });
         Assert.Equal(RouteStatus.NoHandler, result.Status);
     }
+
+    private sealed record OrderUpdate(string Market, decimal Price, DateTimeOffset At, List<string> Tags);
+
+    [Fact]
+    public async Task Typed_payloads_round_trip_complex_objects_across_nodes()
+    {
+        var a = await _cluster.StartNodeAsync(WithRouting);
+        var b = await _cluster.StartNodeAsync(WithRouting);
+        var received = new TaskCompletionSource<RoutedDelivery<OrderUpdate>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = b.Router.RegisterHandler<OrderUpdate>("order", (delivery, _) =>
+        {
+            received.TrySetResult(delivery);
+            return ValueTask.CompletedTask;
+        });
+        await WaitForAdvertisersAsync(a, "order", 1);
+
+        var update = new OrderUpdate("main", 3.75m, DateTimeOffset.UtcNow, ["live", "boosted"]);
+        var result = await a.Router.RouteAsync("order", "order_42", update);
+
+        Assert.Equal(RouteStatus.Delivered, result.Status);
+        var delivery = await received.Task.WaitAsync(TestCluster.Eventually);
+        Assert.Equal(update.Market, delivery.Value.Market);
+        Assert.Equal(update.Price, delivery.Value.Price);
+        Assert.Equal(update.At, delivery.Value.At);
+        Assert.Equal(update.Tags, delivery.Value.Tags);
+        Assert.Equal(new LeaseKey("order", "order_42"), delivery.Key);
+        Assert.Equal(a.LocalNodeId, delivery.Origin);
+        Assert.True(delivery.Token.Term > 0);
+    }
 }

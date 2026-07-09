@@ -114,6 +114,22 @@ await using var registration = cluster.Router.RegisterHandler("order", (delivery
 RouteResult result = await cluster.Router.RouteAsync("order", orderId, payloadBytes, ct);
 ```
 
+Payloads are raw bytes on the wire, but generic overloads handle serialization for you:
+
+```csharp
+public sealed record OrderUpdate(string Market, decimal Price, DateTimeOffset At);
+
+await using var reg = cluster.Router.RegisterHandler<OrderUpdate>("order", (delivery, ct) =>
+{
+    Apply(delivery.Key.Id, delivery.Value); // delivery.Value is the deserialized OrderUpdate
+    return ValueTask.CompletedTask;
+});
+
+await cluster.Router.RouteAsync("order", orderId, new OrderUpdate("main", 3.75m, DateTimeOffset.UtcNow));
+```
+
+The default serializer is System.Text.Json (no extra dependencies; pass your own `JsonSerializerOptions` — e.g. a source-generated resolver for Native AOT — via `new JsonPayloadSerializer(options)`). To use MessagePack, MemoryPack or anything else, implement the two-method `IRoutedPayloadSerializer` and assign `options.Routing.PayloadSerializer`; all nodes must agree on it. Raw `byte[]`/`ReadOnlyMemory<byte>` overloads always bypass the serializer — ideal for forwarding already-encoded messages without a decode/re-encode cycle.
+
 If the key already has an owner, the payload goes there (in-process when it's you, over a pooled direct TLS channel otherwise, relayed via the coordinator as fallback). If the key is **unowned**, the coordinator force-assigns the lease to the least-loaded node that registered a handler for the type — the one deliberate exception to pull-only grants, safe because a registered handler proves the assignee can process. The first route for a key pays that assignment round-trip; after that the owner is cached locally. Delivery is at-least-once with acknowledgments: on `Timeout` you may retry and the handler may see a duplicate — `delivery.Token` (the fencing token) is provided for idempotency. Payloads travel as raw bytes (never base64) up to `MaxPayloadBytes`. See the [Router sample](samples/CoLibra.Sample.Router/).
 
 ## Completion tracking (opt-in)

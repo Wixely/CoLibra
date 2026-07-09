@@ -79,6 +79,9 @@ internal sealed class CoLibraOptionsValidator : IValidateOptions<CoLibraOptions>
 
             if (options.Routing.IdleChannelTimeout <= TimeSpan.Zero)
                 failures.Add("Routing.IdleChannelTimeout must be positive.");
+
+            if (options.Routing.PayloadSerializer is null)
+                failures.Add("Routing.PayloadSerializer must not be null.");
         }
 
         return failures.Count > 0
