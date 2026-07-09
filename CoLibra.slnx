@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/CoLibra.Sample.Worker/CoLibra.Sample.Worker.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/CoLibra/CoLibra.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CoLibra.IntegrationTests/CoLibra.IntegrationTests.csproj" />
+    <Project Path="tests/CoLibra.Tests/CoLibra.Tests.csproj" />
+  </Folder>
+</Solution>
