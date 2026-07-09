@@ -45,6 +45,7 @@ internal sealed class CoordinatorLeaseTable
     private sealed record PendingOther(NodeId Requester, Guid RequestId, long DeadlineTs);
 
     private readonly CoLibraOptions _options;
+    private readonly CompletionRegistry? _completions;
     private readonly long _ttlTicks;
     private readonly long _graceTicks;
     private readonly Dictionary<LeaseKey, Entry> _leases = [];
@@ -54,10 +55,12 @@ internal sealed class CoordinatorLeaseTable
     private readonly Dictionary<NodeId, double> _nodeWeights = [];
     private long _sequence;
 
-    public CoordinatorLeaseTable(long term, CoLibraOptions options, TimeProvider timeProvider)
+    public CoordinatorLeaseTable(long term, CoLibraOptions options, TimeProvider timeProvider,
+        CompletionRegistry? completions = null)
     {
         Term = term;
         _options = options;
+        _completions = completions;
         _ttlTicks = (long)(options.LeaseTtl.TotalSeconds * timeProvider.TimestampFrequency);
         _graceTicks = (long)(options.OtherPreferenceGraceWindow.TotalSeconds * timeProvider.TimestampFrequency);
     }
@@ -101,6 +104,14 @@ internal sealed class CoordinatorLeaseTable
 
     public AcquireOutcome Acquire(NodeId requester, Guid requestId, LeaseKey key, ProcessingPreference preference, long nowTs)
     {
+        if (_completions?.Contains(key) == true)
+        {
+            return new AcquireOutcome
+            {
+                Immediate = new GrantDecision(requester, requestId, key, false, default, LeaseDenialReason.Completed, null),
+            };
+        }
+
         if (_leases.TryGetValue(key, out var entry))
         {
             if (entry.Owner == requester)
@@ -181,6 +192,10 @@ internal sealed class CoordinatorLeaseTable
                 else
                     lost.Add(key);
             }
+            else if (_completions?.Contains(key) == true)
+            {
+                lost.Add(key); // completed keys are never re-adopted; the renewer must drop it
+            }
             else
             {
                 // Expired here but the owner still renews (e.g. right after failover): the key is
@@ -202,6 +217,12 @@ internal sealed class CoordinatorLeaseTable
         var rejected = new List<LeaseKey>();
         foreach (var (key, token) in asserts)
         {
+            if (_completions?.Contains(key) == true)
+            {
+                rejected.Add(key); // the key finished elsewhere while this node was away
+                continue;
+            }
+
             if (_leases.TryGetValue(key, out var entry) && entry.Owner != owner)
             {
                 if (entry.Token >= token)
@@ -219,6 +240,43 @@ internal sealed class CoordinatorLeaseTable
         }
 
         return rejected;
+    }
+
+    public bool TryGetOwner(LeaseKey key, out NodeId owner, out FencingToken token)
+    {
+        if (_leases.TryGetValue(key, out var entry))
+        {
+            owner = entry.Owner;
+            token = entry.Token;
+            return true;
+        }
+
+        owner = default;
+        token = default;
+        return false;
+    }
+
+    /// <summary>Issues the token a forced assignment will commit with (two-step: assign message first, commit on ack).</summary>
+    public FencingToken NextToken() => new(Term, ++_sequence);
+
+    /// <summary>Force-installs an owner for an unowned key (routed-delivery assignment).</summary>
+    public void Assign(NodeId owner, LeaseKey key, FencingToken token, long nowTs)
+    {
+        _leases[key] = new Entry { Owner = owner, Token = token, DeadlineTs = nowTs + _ttlTicks };
+        AdjustCount(key.Type, owner, +1);
+        _pendingOther.Remove(key);
+    }
+
+    /// <summary>The candidate with the lowest weighted lease count for the type; null when there are no candidates.</summary>
+    public NodeId? PickLeastLoaded(string type, IReadOnlyCollection<NodeId> candidates)
+    {
+        if (candidates.Count == 0)
+            return null;
+
+        var counts = _countsByType.GetValueOrDefault(type);
+        return candidates
+            .OrderBy(n => (counts?.GetValueOrDefault(n) ?? 0) / Math.Max(_nodeWeights.GetValueOrDefault(n, 1.0), 0.001))
+            .First();
     }
 
     /// <summary>Registers a node's interest in a key without acquiring (used for decision-cache invalidation).</summary>
@@ -246,6 +304,19 @@ internal sealed class CoordinatorLeaseTable
             if (_leases.ContainsKey(key))
             {
                 _pendingOther.Remove(key);
+                continue;
+            }
+
+            if (_completions?.Contains(key) == true)
+            {
+                // Completed while parked: resolve every waiter as denied instead of granting.
+                _pendingOther.Remove(key);
+                foreach (var parked in pending)
+                {
+                    outcome.MaturedGrants.Add(new GrantDecision(
+                        parked.Requester, parked.RequestId, key, false, default, LeaseDenialReason.Completed, null));
+                }
+
                 continue;
             }
 

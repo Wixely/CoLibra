@@ -89,4 +89,41 @@ public class CoLibraOptionsValidatorTests
         Assert.StartsWith(AppContext.BaseDirectory, path);
         Assert.EndsWith(Path.Combine("colibra", "svc.pfx"), path);
     }
+
+    [Fact]
+    public void Completion_tracking_accepts_sensible_settings()
+    {
+        var options = Valid();
+        options.CompletionTracking.Enabled = true;
+        options.CompletionTracking.Retention = TimeSpan.FromHours(1);
+        var result = new CoLibraOptionsValidator().Validate(null, options);
+        Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
+    }
+
+    [Fact]
+    public void Completion_tracking_rejects_tiny_capacity()
+    {
+        var options = Valid();
+        options.CompletionTracking.Enabled = true;
+        options.CompletionTracking.MaxEntriesPerType = 10;
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Fact]
+    public void Completion_tracking_rejects_retention_within_lease_ttl()
+    {
+        var options = Valid();
+        options.CompletionTracking.Enabled = true;
+        options.CompletionTracking.Retention = options.LeaseTtl;
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Fact]
+    public void Disabled_completion_tracking_skips_its_validation()
+    {
+        var options = Valid();
+        options.CompletionTracking.MaxEntriesPerType = 10; // invalid, but the feature is off
+        var result = new CoLibraOptionsValidator().Validate(null, options);
+        Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
+    }
 }

@@ -56,6 +56,31 @@ internal sealed class CoLibraOptionsValidator : IValidateOptions<CoLibraOptions>
         if (options.DecisionCacheMaxEntries < 1)
             failures.Add("DecisionCacheMaxEntries must be at least 1.");
 
+        if (options.CompletionTracking.Enabled)
+        {
+            if (options.CompletionTracking.MaxEntriesPerType < 1_000)
+                failures.Add("CompletionTracking.MaxEntriesPerType must be at least 1000.");
+
+            if (options.CompletionTracking.Retention is { } retention && retention <= options.LeaseTtl)
+                failures.Add("CompletionTracking.Retention must exceed LeaseTtl when set.");
+        }
+
+        if (options.Routing.Enabled)
+        {
+            if (options.Routing.MaxPayloadBytes is < 1 or > 3 * 1024 * 1024)
+                failures.Add("Routing.MaxPayloadBytes must be 1 byte to 3 MiB (frame-limit headroom).");
+
+            if (options.Routing.DeliveryTimeout <= TimeSpan.Zero)
+                failures.Add("Routing.DeliveryTimeout must be positive.");
+
+            if (options.Routing.AssignmentAckTimeout <= TimeSpan.Zero ||
+                options.Routing.AssignmentAckTimeout >= options.Routing.DeliveryTimeout)
+                failures.Add("Routing.AssignmentAckTimeout must be positive and smaller than DeliveryTimeout.");
+
+            if (options.Routing.IdleChannelTimeout <= TimeSpan.Zero)
+                failures.Add("Routing.IdleChannelTimeout must be positive.");
+        }
+
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;

@@ -25,6 +25,8 @@ internal sealed partial class CoLibraNode
         public long LastAnnounceTs { get; set; }
         public long LastSelfRenewTs { get; set; }
         public Dictionary<NodeId, long> RecentlyDeparted { get; } = [];
+        public List<LeaseKeyDto> PendingCompletionSync { get; } = [];
+        public Dictionary<LeaseKey, PendingAssignment> PendingAssignments { get; } = [];
 
         public void DisposeAllSessions()
         {
@@ -41,6 +43,8 @@ internal sealed partial class CoLibraNode
         public required IMessageChannel Connection { get; init; }
         public required MemberDto Dto { get; set; }
         public long LastSeenTs { get; set; }
+        public bool SupportsCompletionSync { get; init; }
+        public IReadOnlyList<string> RoutedTypes { get; set; } = [];
     }
 
     private sealed class MemberRole
@@ -398,7 +402,9 @@ internal sealed partial class CoLibraNode
                 .ConfigureAwait(false);
             await channel.SendAsync(new JoinRequestMessage(
                 ProtocolConstants.ProtocolVersion, _serviceVersion.ToString(), _options.Weight,
-                _transport.MeshEndpoint.Port, heldDtos), ct).ConfigureAwait(false);
+                _transport.MeshEndpoint.Port, heldDtos,
+                SupportsCompletionSync: _completions is not null,
+                RoutedTypes: _routedTypesSnapshot), ct).ConfigureAwait(false);
 
             while (true)
             {
@@ -477,6 +483,7 @@ internal sealed partial class CoLibraNode
 
         Volatile.Write(ref _lastAckTimestamp, now);
         _negativeCache.Clear();
+        _ownerCache.Clear(); // owners resolved under the previous coordinator may be stale
         ApplyMembership(response.Members, coordinatorId, endpoint.Address);
         SetState(ClusterState.Member);
 
@@ -487,6 +494,10 @@ internal sealed partial class CoLibraNode
             PeerIncarnation = coordinatorIncarnation,
             IsCoordinatorLink = true,
         });
+
+        // Upload our completion set: this is what makes the registry survive coordinator death —
+        // every member carries a full copy and rejoining unions it into the new coordinator.
+        SendCompletionSnapshot(channel);
 
         foreach (var pending in _pendingAcquires.Values.ToList())
         {

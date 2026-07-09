@@ -5,17 +5,37 @@ namespace CoLibra.Protocol;
 /// <summary>
 /// Stream framing: [4B LE payload length][1B protocol version][1B message type][JSON payload].
 /// The length covers the version and type bytes plus the payload.
+/// Exception: <see cref="MessageType.RoutedPayload"/> uses a hybrid body —
+/// [4B LE header length][JSON header][raw payload bytes] — so application payloads are never
+/// base64-inflated. Every other message stays pure JSON.
 /// </summary>
 internal static class FrameCodec
 {
     public static byte[] Encode(Message message)
     {
+        if (message is RoutedPayloadMessage routed)
+            return EncodeRouted(routed);
+
         var payload = CoLibraJsonContext.Resolver.Serialize(message);
         var frame = new byte[4 + 2 + payload.Length];
         BinaryPrimitives.WriteInt32LittleEndian(frame, payload.Length + 2);
         frame[4] = ProtocolConstants.ProtocolVersion;
         frame[5] = (byte)message.Type;
         payload.CopyTo(frame.AsSpan(6));
+        return frame;
+    }
+
+    private static byte[] EncodeRouted(RoutedPayloadMessage message)
+    {
+        var header = CoLibraJsonContext.Resolver.Serialize(message); // Payload is [JsonIgnore]
+        var body = message.Payload;
+        var frame = new byte[4 + 2 + 4 + header.Length + body.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(frame, 2 + 4 + header.Length + body.Length);
+        frame[4] = ProtocolConstants.ProtocolVersion;
+        frame[5] = (byte)MessageType.RoutedPayload;
+        BinaryPrimitives.WriteInt32LittleEndian(frame.AsSpan(6), header.Length);
+        header.CopyTo(frame.AsSpan(10));
+        body.CopyTo(frame.AsSpan(10 + header.Length));
         return frame;
     }
 
@@ -47,10 +67,26 @@ internal static class FrameCodec
             if (version != ProtocolConstants.ProtocolVersion)
                 throw new InvalidDataException($"Unsupported protocol version {version} (local {ProtocolConstants.ProtocolVersion}).");
 
+            if ((MessageType)body[1] == MessageType.RoutedPayload)
+                return DecodeRouted(body);
+
             var message = CoLibraJsonContext.Resolver.Deserialize((MessageType)body[1], body.AsSpan(2));
             if (message is not null)
                 return message; // unknown types are skipped for forward compatibility
         }
+    }
+
+    private static RoutedPayloadMessage DecodeRouted(byte[] body)
+    {
+        // body = [1B ver][1B type][4B header length][JSON header][raw payload]
+        var headerLength = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2));
+        if (headerLength < 2 || 6 + headerLength > body.Length)
+            throw new InvalidDataException($"Invalid routed-payload header length {headerLength}.");
+
+        var header = (RoutedPayloadMessage?)CoLibraJsonContext.Resolver.Deserialize(
+            MessageType.RoutedPayload, body.AsSpan(6, headerLength))
+            ?? throw new InvalidDataException("Unreadable routed-payload header.");
+        return header with { Payload = body[(6 + headerLength)..] };
     }
 
     private static async ValueTask<bool> TryReadExactAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)

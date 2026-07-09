@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/samples/">
     <Project Path="samples/CoLibra.Sample.PrimeGrid/CoLibra.Sample.PrimeGrid.csproj" />
+    <Project Path="samples/CoLibra.Sample.Router/CoLibra.Sample.Router.csproj" />
     <Project Path="samples/CoLibra.Sample.Worker/CoLibra.Sample.Worker.csproj" />
   </Folder>
   <Folder Name="/src/">

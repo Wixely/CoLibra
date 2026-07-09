@@ -18,8 +18,9 @@ internal sealed class PrimeGridOptions
 
 /// <summary>
 /// Scans the bucket list and sieves every bucket CoLibra grants to this instance. A finished
-/// bucket's lease is never released — the held lease is the cluster-wide "done" marker. If
-/// this instance dies, its leases expire and the survivors recompute those buckets.
+/// bucket is recorded with MarkCompletedAsync, which replicates the fact to every node — so
+/// if this instance dies, survivors skip its finished buckets and recompute only the bucket
+/// that was in flight.
 /// </summary>
 internal sealed class PrimeWorker(
     ICoLibraCluster cluster,
@@ -71,13 +72,14 @@ internal sealed class PrimeWorker(
             while (!stoppingToken.IsCancellationRequested)
             {
                 var blockedByOthers = await SweepAsync(basePrimes, stoppingToken);
+                var clusterDone = CountClusterDone();
 
-                if (blockedByOthers == 0 && !completeAnnounced)
+                if (clusterDone == options.RangeCount && !completeAnnounced)
                 {
                     completeAnnounced = true;
                     logger.LogInformation(
-                        "COMPLETE: every remaining bucket is sieved by this node. Mine: {Mine:N0}/{Total:N0} buckets, {Primes:N0} primes, {Elapsed:mm\\:ss} elapsed",
-                        DoneCount, options.RangeCount, Interlocked.Read(ref _primesFound), _elapsed.Elapsed);
+                        "CLUSTER COMPLETE: all {Total:N0} buckets sieved. This node contributed {Mine:N0} buckets and {Primes:N0} primes ({Elapsed:mm\\:ss} elapsed)",
+                        options.RangeCount, DoneCount, Interlocked.Read(ref _primesFound), _elapsed.Elapsed);
                 }
                 else if (blockedByOthers > 0)
                 {
@@ -107,12 +109,16 @@ internal sealed class PrimeWorker(
                     continue;
             }
 
+            // Finished by any node, alive or dead: the replicated registry answers locally.
+            if (cluster.IsCompleted(options.LeaseType, start.ToString()))
+                continue;
+
             // 'This' preference = work-stealing: whichever instance asks first gets the bucket,
             // so a faster machine naturally takes a bigger share of the number space.
             if (!await cluster.CanProcessAsync(options.LeaseType, start.ToString(), ProcessingPreference.This, ct))
             {
                 blockedByOthers++;
-                continue; // owned (or already completed) by another node; answer is cached locally
+                continue; // owned by another node right now; answer is cached locally
             }
 
             var end = Math.Min(start + options.RangeSize, options.Target);
@@ -125,10 +131,31 @@ internal sealed class PrimeWorker(
             Interlocked.Add(ref _primesFound, count);
             Interlocked.Add(ref _numbersScanned, end - start);
             logger.LogDebug("Bucket {Start:N0}: {Count:N0} primes (largest {Largest:N0})", start, count, largest);
-            // No release: holding the lease marks the bucket done for the whole cluster.
+
+            // Cluster-wide "done, forever" — releases the lease and replicates the completion.
+            await cluster.MarkCompletedAsync(options.LeaseType, start.ToString(), ct);
         }
 
         return blockedByOthers;
+    }
+
+    /// <summary>Buckets finished cluster-wide: sieved locally or completed by any (live or dead) node.</summary>
+    private long CountClusterDone()
+    {
+        long done = 0;
+        for (long start = 0; start < options.Target; start += options.RangeSize)
+        {
+            bool mine;
+            lock (_doneLock)
+            {
+                mine = _doneBuckets.ContainsKey(start);
+            }
+
+            if (mine || cluster.IsCompleted(options.LeaseType, start.ToString()))
+                done++;
+        }
+
+        return done;
     }
 
     private async Task ReportStatusAsync(CancellationToken ct)
@@ -140,11 +167,12 @@ internal sealed class PrimeWorker(
                 await Task.Delay(TimeSpan.FromSeconds(5), ct);
                 var scanned = Interlocked.Read(ref _numbersScanned);
                 logger.LogInformation(
-                    "[{State}] {Nodes} node(s) | my buckets {Mine:N0}/{Total:N0} | my primes {Primes:N0} | {Rate:N1}M numbers/s",
+                    "[{State}] {Nodes} node(s) | cluster {Done:N0}/{Total:N0} | my buckets {Mine:N0} | my primes {Primes:N0} | {Rate:N1}M numbers/s",
                     cluster.State,
                     cluster.Members.Count,
-                    DoneCount,
+                    CountClusterDone(),
                     options.RangeCount,
+                    DoneCount,
                     Interlocked.Read(ref _primesFound),
                     scanned / Math.Max(_elapsed.Elapsed.TotalSeconds, 0.001) / 1_000_000);
             }

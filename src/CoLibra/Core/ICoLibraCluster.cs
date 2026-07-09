@@ -31,6 +31,29 @@ public interface ICoLibraCluster
     /// <summary>Explicitly gives up ownership of a key so another node can claim it.</summary>
     ValueTask ReleaseAsync(string type, string id);
 
+    /// <summary>
+    /// Records that this key is finished forever and releases its lease if held. The completion
+    /// is replicated to every member (within roughly a heartbeat), so the finished work is not
+    /// recomputed even if this node dies — <see cref="CanProcessAsync"/> returns false for
+    /// completed keys on every node. Requires <see cref="CompletionTrackingOptions.Enabled"/>;
+    /// throws <see cref="InvalidOperationException"/> otherwise. Completions recorded while
+    /// disconnected are re-synced when the node rejoins.
+    /// </summary>
+    ValueTask MarkCompletedAsync(string type, string id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lock-free local read: whether the key is known to be completed. Always false when
+    /// <see cref="CompletionTrackingOptions.Enabled"/> is off. The local registry converges
+    /// within about a heartbeat of a completion anywhere in the cluster.
+    /// </summary>
+    bool IsCompleted(string type, string id);
+
+    /// <summary>
+    /// Routed delivery (requires <see cref="RoutingOptions.Enabled"/>; members throw
+    /// <see cref="InvalidOperationException"/> otherwise). See <see cref="ICoLibraRouter"/>.
+    /// </summary>
+    ICoLibraRouter Router { get; }
+
     /// <summary>The keys this node currently owns.</summary>
     IReadOnlyCollection<LeaseKey> HeldLeases { get; }
 

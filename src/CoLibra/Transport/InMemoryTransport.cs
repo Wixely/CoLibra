@@ -176,15 +176,15 @@ internal sealed class InMemoryChannel(
 {
     public EndPoint RemoteEndPoint { get; } = remoteEndPoint;
 
-    public ValueTask SendAsync(Message message, CancellationToken cancellationToken)
+    public async ValueTask SendAsync(Message message, CancellationToken cancellationToken)
     {
-        // Round-trip through the serializer so in-memory tests exercise the real wire shapes.
-        var payload = CoLibraJsonContext.Resolver.Serialize(message);
-        var copy = CoLibraJsonContext.Resolver.Deserialize(message.Type, payload)
+        // Round-trip through the real frame codec so in-memory tests exercise the actual wire
+        // format, including the hybrid routed-payload frame (raw bytes after a JSON header).
+        using var stream = new MemoryStream(FrameCodec.Encode(message));
+        var copy = await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException($"Message {message.Type} did not round-trip.");
-        return outgoing.TryWrite(copy)
-            ? ValueTask.CompletedTask
-            : throw new IOException("In-memory channel closed.");
+        if (!outgoing.TryWrite(copy))
+            throw new IOException("In-memory channel closed.");
     }
 
     public async ValueTask<Message?> ReceiveAsync(CancellationToken cancellationToken)

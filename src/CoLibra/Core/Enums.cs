@@ -116,4 +116,10 @@ public enum LeaseDenialReason
 
     /// <summary>The <see cref="ProcessingPreference.Other"/> grace window ended with another node taking the key.</summary>
     PreferredElsewhere = 5,
+
+    /// <summary>
+    /// The key was marked completed via <see cref="ICoLibraCluster.MarkCompletedAsync"/>;
+    /// completed keys are never granted again (while the tombstone is retained).
+    /// </summary>
+    Completed = 6,
 }

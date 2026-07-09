@@ -31,12 +31,21 @@ internal enum MessageType : byte
     LeaseGrantResult = 31,
     LeaseRelease = 32,
     LeaseAvailableNotify = 33,
+    CompletionSync = 34,
 
     // Election
     ElectionStart = 40,
     ElectionAlive = 41,
 
     Error = 50,
+
+    // Routed delivery
+    OwnerResolve = 60,
+    OwnerResolveReply = 61,
+    LeaseAssign = 62,
+    LeaseAssignAck = 63,
+    RoutedPayload = 64,   // hybrid frame: JSON header + raw payload bytes (see FrameCodec)
+    RoutedAck = 65,
 }
 
 internal abstract record Message
@@ -134,7 +143,9 @@ internal sealed record JoinRequestMessage(
     string ServiceVersion,
     double Weight,
     int MeshPort,
-    IReadOnlyList<HeldLeaseDto> HeldLeases) : Message
+    IReadOnlyList<HeldLeaseDto> HeldLeases,
+    bool SupportsCompletionSync = false,
+    IReadOnlyList<string>? RoutedTypes = null) : Message
 {
     public override MessageType Type => MessageType.JoinRequest;
 }
@@ -168,7 +179,8 @@ internal sealed record JoinRejectedMessage(
 internal sealed record HeartbeatMessage(
     IReadOnlyList<HeldLeaseDto> HeldLeases,
     Dictionary<string, int> PerTypeCounts,
-    double Weight) : Message
+    double Weight,
+    IReadOnlyList<string>? RoutedTypes = null) : Message
 {
     public override MessageType Type => MessageType.Heartbeat;
 }
@@ -217,7 +229,8 @@ internal sealed record LeaseGrantResultMessage(
     public override MessageType Type => MessageType.LeaseGrantResult;
 }
 
-internal sealed record LeaseReleaseMessage(string LeaseType, string LeaseId, long Term, long Sequence) : Message
+internal sealed record LeaseReleaseMessage(
+    string LeaseType, string LeaseId, long Term, long Sequence, bool AsCompleted = false) : Message
 {
     public override MessageType Type => MessageType.LeaseRelease;
 }
@@ -225,6 +238,19 @@ internal sealed record LeaseReleaseMessage(string LeaseType, string LeaseId, lon
 internal sealed record LeaseAvailableNotifyMessage(IReadOnlyList<LeaseKeyDto> Keys) : Message
 {
     public override MessageType Type => MessageType.LeaseAvailableNotify;
+}
+
+/// <summary>
+/// Union-merge of completion tombstones, chunked to stay well under the frame limit. Sent
+/// coordinator → members (steady-state broadcast and join-time snapshot) and member →
+/// coordinator (join-time snapshot upload, which survives coordinator failover).
+/// </summary>
+internal sealed record CompletionSyncMessage(IReadOnlyList<LeaseKeyDto> Entries) : Message
+{
+    public override MessageType Type => MessageType.CompletionSync;
+
+    /// <summary>Entries per message; 1000 ids of typical size is ~50 KB, far below MaxFrameBytes.</summary>
+    public const int ChunkSize = 1000;
 }
 
 // ---------------------------------------------------------------------------
@@ -250,4 +276,88 @@ internal sealed record ElectionAliveMessage(
 internal sealed record ErrorMessage(string Code, string Detail) : Message
 {
     public override MessageType Type => MessageType.Error;
+}
+
+// ---------------------------------------------------------------------------
+// Routed delivery
+// ---------------------------------------------------------------------------
+
+internal sealed record OwnerResolveMessage(Guid RequestId, string LeaseType, string LeaseId) : Message
+{
+    public override MessageType Type => MessageType.OwnerResolve;
+}
+
+internal enum ResolveOutcome
+{
+    /// <summary>The key has an owner (possibly just force-assigned).</summary>
+    Resolved = 0,
+
+    /// <summary>No node advertises a handler for the type.</summary>
+    NoHandler = 1,
+
+    /// <summary>Refused under the current split-brain / quorum policy.</summary>
+    Unavailable = 2,
+
+    /// <summary>Transient (rebuild window, election in progress); retry shortly.</summary>
+    Retry = 3,
+
+    /// <summary>The key was marked completed; there is nothing left to route to.</summary>
+    Completed = 4,
+}
+
+/// <summary>Token fields are filled when the owner is the requester itself, so it can install the lease locally.</summary>
+internal sealed record OwnerResolveReplyMessage(
+    Guid RequestId,
+    ResolveOutcome Outcome,
+    Guid? OwnerNodeId,
+    string? OwnerHost,
+    int OwnerPort,
+    bool WasAssigned,
+    long TokenTerm = 0,
+    long TokenSequence = 0) : Message
+{
+    public override MessageType Type => MessageType.OwnerResolveReply;
+}
+
+/// <summary>Coordinator → member: install this lease (forced assignment). The member acks before the coordinator commits.</summary>
+internal sealed record LeaseAssignMessage(
+    string LeaseType, string LeaseId, long Term, long Sequence, double TtlSeconds) : Message
+{
+    public override MessageType Type => MessageType.LeaseAssign;
+}
+
+internal sealed record LeaseAssignAckMessage(
+    string LeaseType, string LeaseId, long Term, long Sequence, bool Accepted) : Message
+{
+    public override MessageType Type => MessageType.LeaseAssignAck;
+}
+
+/// <summary>
+/// A routed application payload. The <see cref="Payload"/> travels as raw bytes after a JSON
+/// header (never base64) — see FrameCodec's hybrid encoding. <see cref="RelayToNodeId"/> asks
+/// the receiving coordinator to forward to that member (relay path).
+/// </summary>
+internal sealed record RoutedPayloadMessage(
+    Guid RouteId,
+    string LeaseType,
+    string LeaseId,
+    Guid OriginNodeId,
+    Guid? RelayToNodeId) : Message
+{
+    public override MessageType Type => MessageType.RoutedPayload;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public byte[] Payload { get; init; } = [];
+}
+
+internal enum RouteAckStatus
+{
+    Delivered = 0,
+    NoHandler = 1,
+    NotOwner = 2,
+}
+
+internal sealed record RoutedAckMessage(Guid RouteId, RouteAckStatus Status, Guid? RelayToNodeId) : Message
+{
+    public override MessageType Type => MessageType.RoutedAck;
 }

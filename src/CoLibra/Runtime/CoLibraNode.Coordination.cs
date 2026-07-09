@@ -32,8 +32,22 @@ internal sealed partial class CoLibraNode
                 break;
 
             case LeaseReleaseMessage m when _coordinator is { } coordinator:
-                if (coordinator.Table.Release(peer.PeerId, new LeaseKey(m.LeaseType, m.LeaseId), out var interested))
-                    NotifyAvailable(coordinator, [(new LeaseKey(m.LeaseType, m.LeaseId), interested)]);
+                var releasedKey = new LeaseKey(m.LeaseType, m.LeaseId);
+                if (m.AsCompleted && _completions is not null)
+                {
+                    // Completed, not available: release without notifying waiters, then replicate.
+                    coordinator.Table.Release(peer.PeerId, releasedKey, out _);
+                    EnqueueCompletionBroadcast(coordinator, [releasedKey]);
+                }
+                else if (coordinator.Table.Release(peer.PeerId, releasedKey, out var interested))
+                {
+                    NotifyAvailable(coordinator, [(releasedKey, interested)]);
+                }
+
+                break;
+
+            case CompletionSyncMessage m:
+                HandleCompletionSync(peer, m);
                 break;
 
             case ElectionStartMessage m:
@@ -65,6 +79,31 @@ internal sealed partial class CoLibraNode
             case LeaseAvailableNotifyMessage m when peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer):
                 HandleLeaseAvailable(m.Keys.Select(k => k.ToKey()).ToList());
                 break;
+
+            // ---- routed delivery ----
+            case OwnerResolveMessage m when _coordinator is { } coordinator:
+                HandleOwnerResolveAsCoordinator(coordinator, peer.PeerId, m);
+                break;
+
+            case OwnerResolveReplyMessage m when peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer):
+                CompleteResolve(m);
+                break;
+
+            case LeaseAssignMessage m when peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer):
+                HandleLeaseAssign(peer, m);
+                break;
+
+            case LeaseAssignAckMessage m when _coordinator is { } coordinator:
+                HandleLeaseAssignAck(coordinator, peer.PeerId, m);
+                break;
+
+            case RoutedPayloadMessage m:
+                HandleRoutedPayload(peer, m);
+                break;
+
+            case RoutedAckMessage m:
+                HandleRoutedAck(peer, m);
+                break;
         }
     }
 
@@ -73,6 +112,7 @@ internal sealed partial class CoLibraNode
     private void HandlePeerClosed(PeerConn peer)
     {
         _ = peer.Channel.DisposeAsync();
+        HandleDirectChannelClosed(peer);
 
         if (peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer) && _state == ClusterState.Member)
         {
@@ -93,6 +133,64 @@ internal sealed partial class CoLibraNode
     {
         _negativeCache.Invalidate(keys);
         Raise(LeaseAvailable, new LeaseAvailableEventArgs { Keys = keys });
+    }
+
+    // =====================================================================================
+    // Completion tracking: union-merge replication
+    // =====================================================================================
+
+    /// <summary>Records completions in the local registry and queues the newly-learned ones for broadcast.</summary>
+    private void EnqueueCompletionBroadcast(CoordinatorRole coordinator, IReadOnlyList<LeaseKey> keys)
+    {
+        if (_completions is null)
+            return;
+
+        foreach (var key in _completions.AddRange(keys, Now()))
+            coordinator.PendingCompletionSync.Add(LeaseKeyDto.From(key));
+    }
+
+    private void HandleCompletionSync(PeerConn peer, CompletionSyncMessage message)
+    {
+        if (_completions is null)
+            return;
+
+        var keys = message.Entries.Select(e => e.ToKey()).ToList();
+        if (_coordinator is { } coordinator)
+        {
+            // A member's snapshot upload (fresh join or post-failover rejoin): union it and
+            // re-broadcast whatever was news, so every copy converges to the same set.
+            if (coordinator.Sessions.ContainsKey(peer.PeerId))
+                EnqueueCompletionBroadcast(coordinator, keys);
+        }
+        else if (peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer))
+        {
+            _completions.AddRange(keys, Now());
+        }
+    }
+
+    private void FlushCompletionSync(CoordinatorRole coordinator)
+    {
+        if (coordinator.PendingCompletionSync.Count == 0)
+            return;
+
+        foreach (var chunk in coordinator.PendingCompletionSync.Chunk(CompletionSyncMessage.ChunkSize))
+        {
+            var message = new CompletionSyncMessage(chunk);
+            foreach (var session in coordinator.Sessions.Values.Where(s => s.SupportsCompletionSync))
+                _ = SendSafeAsync(session.Connection, message);
+        }
+
+        coordinator.PendingCompletionSync.Clear();
+    }
+
+    /// <summary>Streams the full local registry to one peer in frame-safe chunks (join-time exchange).</summary>
+    private void SendCompletionSnapshot(IMessageChannel connection)
+    {
+        if (_completions is null)
+            return;
+
+        foreach (var chunk in _completions.Snapshot().Chunk(CompletionSyncMessage.ChunkSize))
+            _ = SendSafeAsync(connection, new CompletionSyncMessage([.. chunk.Select(LeaseKeyDto.From)]));
     }
 
     // =====================================================================================
@@ -165,6 +263,8 @@ internal sealed partial class CoLibraNode
             Dto = new MemberDto(peer.PeerId.Value, peer.PeerIncarnation, remoteAddress.ToString(),
                 request.MeshPort, request.ServiceVersion, request.Weight, false),
             LastSeenTs = now,
+            SupportsCompletionSync = request.SupportsCompletionSync,
+            RoutedTypes = request.RoutedTypes ?? [],
         };
         coordinator.Sessions[peer.PeerId] = session;
         coordinator.RecentlyDeparted.Remove(peer.PeerId);
@@ -181,6 +281,9 @@ internal sealed partial class CoLibraNode
             [.. rejected.Select(LeaseKeyDto.From)],
             _options.LeaseTtl.TotalSeconds));
 
+        if (session.SupportsCompletionSync)
+            SendCompletionSnapshot(peer.Channel);
+
         UpdateCoordinatorMembership(coordinator);
         _logger.LogInformation("Node {NodeId} joined ({Count} members)", peer.PeerId, coordinator.Sessions.Count + 1);
     }
@@ -193,6 +296,8 @@ internal sealed partial class CoLibraNode
         var now = Now();
         session.LastSeenTs = now;
         session.Dto = session.Dto with { Weight = heartbeat.Weight };
+        if (heartbeat.RoutedTypes is not null)
+            session.RoutedTypes = heartbeat.RoutedTypes;
         coordinator.Table.SetWeight(peer.PeerId, heartbeat.Weight);
 
         var lost = coordinator.Table.Renew(
@@ -284,6 +389,7 @@ internal sealed partial class CoLibraNode
         _ = session.Connection.DisposeAsync();
         coordinator.RecentlyDeparted[nodeId] = Now() + ToTicks(_options.MemberTimeout) * 6;
         NotifyAvailable(coordinator, coordinator.Table.NodeDown(nodeId));
+        HandleAssigneeDeparted(coordinator, nodeId);
         UpdateCoordinatorMembership(coordinator);
     }
 
@@ -362,6 +468,7 @@ internal sealed partial class CoLibraNode
         _member = null;
         foreach (var pending in _pendingAcquires.Values)
             pending.Sent = false; // re-dispatched after the election settles
+        FailAllPendingResolves(); // resolvers retry against whichever coordinator emerges
 
         SetState(ClusterState.Electing);
         var proposedTerm = ++_highestTerm;
@@ -496,7 +603,7 @@ internal sealed partial class CoLibraNode
         _member = null;
 
         var now = Now();
-        var table = new CoordinatorLeaseTable(term, _options, _time);
+        var table = new CoordinatorLeaseTable(term, _options, _time, _completions);
         var coordinator = new CoordinatorRole
         {
             Term = term,
@@ -579,7 +686,17 @@ internal sealed partial class CoLibraNode
 
         TickPendingTimeouts(now);
         TickLocalLeaseExpiry();
+        TickDirectChannels(now);
+
+        if (_completions is not null && Since(_lastCompletionTrimTs) >= CompletionTrimInterval)
+        {
+            _lastCompletionTrimTs = now;
+            _completions.TrimExpired(now);
+        }
     }
+
+    private static readonly TimeSpan CompletionTrimInterval = TimeSpan.FromSeconds(5);
+    private long _lastCompletionTrimTs;
 
     private void TickMember(long now)
     {
@@ -589,7 +706,8 @@ internal sealed partial class CoLibraNode
         if (Since(member.LastHeartbeatSentTs) >= _options.HeartbeatInterval)
         {
             member.LastHeartbeatSentTs = now;
-            _ = SendSafeAsync(member.Connection, new HeartbeatMessage(BuildHeldDtos(), BuildTypeCounts(), _options.Weight));
+            _ = SendSafeAsync(member.Connection, new HeartbeatMessage(
+                BuildHeldDtos(), BuildTypeCounts(), _options.Weight, _routedTypesSnapshot));
         }
 
         if (Since(member.LastCoordinatorSignalTs) > _options.MemberTimeout)
@@ -627,6 +745,9 @@ internal sealed partial class CoLibraNode
         NotifyAvailable(coordinator, sweep.Freed);
         foreach (var matured in sweep.MaturedGrants)
             DispatchDecision(coordinator, matured);
+
+        FlushCompletionSync(coordinator);
+        TickPendingAssignments(coordinator, now);
 
         if (coordinator.RebuildDeadlineTs > 0 && now >= coordinator.RebuildDeadlineTs)
         {

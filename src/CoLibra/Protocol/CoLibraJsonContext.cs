@@ -22,9 +22,16 @@ namespace CoLibra.Protocol;
 [JsonSerializable(typeof(LeaseGrantResultMessage))]
 [JsonSerializable(typeof(LeaseReleaseMessage))]
 [JsonSerializable(typeof(LeaseAvailableNotifyMessage))]
+[JsonSerializable(typeof(CompletionSyncMessage))]
 [JsonSerializable(typeof(ElectionStartMessage))]
 [JsonSerializable(typeof(ElectionAliveMessage))]
 [JsonSerializable(typeof(ErrorMessage))]
+[JsonSerializable(typeof(OwnerResolveMessage))]
+[JsonSerializable(typeof(OwnerResolveReplyMessage))]
+[JsonSerializable(typeof(LeaseAssignMessage))]
+[JsonSerializable(typeof(LeaseAssignAckMessage))]
+[JsonSerializable(typeof(RoutedPayloadMessage))]
+[JsonSerializable(typeof(RoutedAckMessage))]
 internal sealed partial class CoLibraJsonContext : JsonSerializerContext
 {
     public static JsonTypeInfoResolverForMessages Resolver { get; } = new();
@@ -51,9 +58,16 @@ internal sealed class JsonTypeInfoResolverForMessages
         LeaseGrantResultMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseGrantResultMessage),
         LeaseReleaseMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseReleaseMessage),
         LeaseAvailableNotifyMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseAvailableNotifyMessage),
+        CompletionSyncMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.CompletionSyncMessage),
         ElectionStartMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.ElectionStartMessage),
         ElectionAliveMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.ElectionAliveMessage),
         ErrorMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.ErrorMessage),
+        OwnerResolveMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.OwnerResolveMessage),
+        OwnerResolveReplyMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.OwnerResolveReplyMessage),
+        LeaseAssignMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseAssignMessage),
+        LeaseAssignAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseAssignAckMessage),
+        RoutedPayloadMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.RoutedPayloadMessage),
+        RoutedAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.RoutedAckMessage),
         _ => throw new NotSupportedException($"Unknown message type {message.GetType()}"),
     };
 
@@ -75,9 +89,16 @@ internal sealed class JsonTypeInfoResolverForMessages
         MessageType.LeaseGrantResult => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseGrantResultMessage),
         MessageType.LeaseRelease => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseReleaseMessage),
         MessageType.LeaseAvailableNotify => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseAvailableNotifyMessage),
+        MessageType.CompletionSync => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.CompletionSyncMessage),
         MessageType.ElectionStart => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.ElectionStartMessage),
         MessageType.ElectionAlive => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.ElectionAliveMessage),
         MessageType.Error => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.ErrorMessage),
+        MessageType.OwnerResolve => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.OwnerResolveMessage),
+        MessageType.OwnerResolveReply => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.OwnerResolveReplyMessage),
+        MessageType.LeaseAssign => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseAssignMessage),
+        MessageType.LeaseAssignAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseAssignAckMessage),
+        MessageType.RoutedPayload => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.RoutedPayloadMessage),
+        MessageType.RoutedAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.RoutedAckMessage),
         _ => null, // unknown message types are ignored for forward compatibility
     };
 }

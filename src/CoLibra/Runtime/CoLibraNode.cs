@@ -26,6 +26,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     private readonly ClusterKeys _keys;
     private readonly DiscoveryCodec _discoveryCodec;
     private readonly DecisionCache _negativeCache;
+    private readonly CompletionRegistry? _completions;
     private readonly Version _serviceVersion;
     private readonly long _incarnation;
 
@@ -68,6 +69,9 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         _discoveryCodec = new DiscoveryCodec(_keys, options.ServiceId, timeProvider);
         _negativeCache = new DecisionCache(
             options.EnableDecisionCache, options.DecisionCacheTtl, options.DecisionCacheMaxEntries, timeProvider);
+        _completions = options.CompletionTracking.Enabled
+            ? new CompletionRegistry(options.CompletionTracking, timeProvider)
+            : null;
         _transport = transport ?? new SocketTransport(
             options,
             CertificateProvider.GetOrCreate(options.ResolveCertificatePath(), options.ServiceId, logger),
@@ -121,6 +125,10 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         {
             SetState(ClusterState.Stopped);
             FailAllPending(LeaseDenialReason.NoCoordinator);
+            FailAllPendingResolves();
+            foreach (var pooled in _directChannels.Values)
+                _ = pooled.Channel.DisposeAsync();
+            _directChannels.Clear();
             _member?.Dispose();
             _coordinator?.DisposeAllSessions();
             tcs.TrySetResult(true);
@@ -163,6 +171,8 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
         if (IsHeldAndFresh(key))
             return ValueTask.FromResult(true);
+        if (_completions?.Contains(key) == true)
+            return ValueTask.FromResult(false);
         if (_negativeCache.IsDenied(key))
             return ValueTask.FromResult(false);
 
@@ -210,6 +220,54 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         }));
     }
 
+    public bool IsCompleted(string type, string id) =>
+        _completions?.Contains(new LeaseKey(type, id)) ?? false;
+
+    public ValueTask MarkCompletedAsync(string type, string id, CancellationToken cancellationToken = default)
+    {
+        if (_completions is null)
+        {
+            throw new InvalidOperationException(
+                "Completion tracking is disabled; set CoLibraOptions.CompletionTracking.Enabled = true to use MarkCompletedAsync.");
+        }
+
+        var key = new LeaseKey(type, id);
+        return new ValueTask(PostWithResult<bool>(tcs =>
+        {
+            MarkCompletedCore(key);
+            tcs.TrySetResult(true);
+            return ValueTask.CompletedTask;
+        }).WaitAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// Records the tombstone locally (its own fact, kept even while disconnected — re-synced on
+    /// the next join), releases the lease if held, and propagates: as coordinator straight into
+    /// the broadcast queue, as member via release-as-completed. Completions are monotonic facts
+    /// about finished work, so they are accepted under every <see cref="SplitBrainPolicy"/>.
+    /// </summary>
+    private void MarkCompletedCore(LeaseKey key)
+    {
+        _held.TryGetValue(key, out var local);
+        RemoveHeld(key, lossReason: null);
+
+        if (_coordinator is { } coordinator)
+        {
+            coordinator.Table.Release(LocalNodeId, key, out _); // completed, not available: no notify
+            EnqueueCompletionBroadcast(coordinator, [key]);     // records locally + queues broadcast
+        }
+        else
+        {
+            _completions!.Add(key, Now());
+            if (_member is { Connection: { } conn })
+            {
+                _ = SendSafeAsync(conn, new LeaseReleaseMessage(
+                    key.Type, key.Id, local?.Token.Term ?? 0, local?.Token.Sequence ?? 0, AsCompleted: true));
+            }
+            // else: recorded locally; the snapshot upload on the next join re-syncs it.
+        }
+    }
+
     private void ReleaseCore(LeaseKey key)
     {
         if (!_held.TryGetValue(key, out var local))
@@ -254,6 +312,12 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
             if (_held.ContainsKey(key) && IsHeldAndFresh(key))
             {
                 tcs.TrySetResult(new GrantResult(true, _held[key].Token, LeaseDenialReason.None, null));
+                return ValueTask.CompletedTask;
+            }
+
+            if (_completions?.Contains(key) == true)
+            {
+                tcs.TrySetResult(new GrantResult(false, default, LeaseDenialReason.Completed, null));
                 return ValueTask.CompletedTask;
             }
 
@@ -312,6 +376,11 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         {
             AddHeld(pending.Key, result.Token);
             _negativeCache.Invalidate([pending.Key]);
+        }
+        else if (result.Reason == LeaseDenialReason.Completed)
+        {
+            // The coordinator knew before we did (stale local registry); backfill it.
+            _completions?.Add(pending.Key, Now());
         }
         else if (result.Reason is LeaseDenialReason.HeldByOther or LeaseDenialReason.Rebalance or LeaseDenialReason.PreferredElsewhere)
         {

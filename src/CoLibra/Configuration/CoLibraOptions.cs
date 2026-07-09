@@ -113,6 +113,21 @@ public sealed class CoLibraOptions
     /// <summary>This node's relative capacity for <see cref="LoadBalanceType.Weighted"/>. Default 1.0.</summary>
     public double Weight { get; set; } = 1.0;
 
+    /// <summary>
+    /// Opt-in replicated completion tracking: <see cref="ICoLibraCluster.MarkCompletedAsync"/>
+    /// records that a key is finished forever, and the fact is replicated to every node so a
+    /// single node's death does not cause its finished work to be recomputed. See
+    /// <see cref="CompletionTrackingOptions"/> for semantics and bounds.
+    /// </summary>
+    public CompletionTrackingOptions CompletionTracking { get; } = new();
+
+    /// <summary>
+    /// Opt-in routed delivery for single-receiver topologies: any node can receive data and
+    /// <see cref="ICoLibraCluster.Router"/> delivers it to the key's lease owner, force-assigning
+    /// an owner when the key is free. See <see cref="RoutingOptions"/>.
+    /// </summary>
+    public RoutingOptions Routing { get; } = new();
+
     internal Version ResolveServiceVersion() =>
         ServiceVersion
         ?? Assembly.GetEntryAssembly()?.GetName().Version
