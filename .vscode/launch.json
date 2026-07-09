@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "PrimeGrid: node 1",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-primegrid",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/bin/Debug/net10.0/CoLibra.Sample.PrimeGrid.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid",
+      "args": [],
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "PrimeGrid: node 2",
+      "type": "coreclr",
+      "request": "launch",
+      // No build here: node 1's build already produced the binaries (rebuilding would hit
+      // the file lock of the running node 1). The stagger delay lets node 1 claim
+      // coordinatorship first, which is the most reliable same-machine startup order.
+      "preLaunchTask": "stagger-node2",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/bin/Debug/net10.0/CoLibra.Sample.PrimeGrid.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid",
+      "args": [],
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "PrimeGrid: quick run (100M, small buckets)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-primegrid",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/bin/Debug/net10.0/CoLibra.Sample.PrimeGrid.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid",
+      "args": ["--Target", "100000000", "--RangeSize", "500000"],
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "PrimeGrid: 2-node cluster",
+      "configurations": ["PrimeGrid: node 1", "PrimeGrid: node 2"],
+      "stopAll": true
+    }
+  ]
+}

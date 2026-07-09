@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-primegrid",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/CoLibra.Sample.PrimeGrid.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary;ForceNoAlign"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "build-solution",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/CoLibra.slnx",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary;ForceNoAlign"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "stagger-node2",
+      "detail": "Lets node 1 build, start and claim coordinatorship before node 2 boots (same-machine discovery is most reliable with staggered starts).",
+      "command": "powershell",
+      "type": "process",
+      "args": ["-NoProfile", "-Command", "Start-Sleep", "8"],
+      "problemMatcher": []
+    },
+    {
+      "label": "test-solution",
+      "command": "dotnet",
+      "type": "process",
+      "args": ["test", "${workspaceFolder}/CoLibra.slnx"],
+      "group": "test",
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}
