@@ -104,6 +104,15 @@ internal sealed partial class CoLibraNode
             case RoutedAckMessage m:
                 HandleRoutedAck(peer, m);
                 break;
+
+            // ---- direct node-to-node messaging ----
+            case DirectMessageMessage m:
+                HandleDirectMessage(peer, m);
+                break;
+
+            case DirectMessageAckMessage m:
+                HandleDirectMessageAck(peer, m);
+                break;
         }
     }
 
@@ -261,7 +270,7 @@ internal sealed partial class CoLibraNode
             Incarnation = peer.PeerIncarnation,
             Connection = peer.Channel,
             Dto = new MemberDto(peer.PeerId.Value, peer.PeerIncarnation, remoteAddress.ToString(),
-                request.MeshPort, request.ServiceVersion, request.Weight, false),
+                request.MeshPort, request.ServiceVersion, request.Weight, false, request.NodeName),
             LastSeenTs = now,
             SupportsCompletionSync = request.SupportsCompletionSync,
             RoutedTypes = request.RoutedTypes ?? [],
@@ -398,7 +407,7 @@ internal sealed partial class CoLibraNode
         var dtos = new List<MemberDto>(coordinator.Sessions.Count + 1)
         {
             new(LocalNodeId.Value, _incarnation, _transport.MeshEndpoint.Address.ToString(),
-                _transport.MeshEndpoint.Port, _serviceVersion.ToString(), _options.Weight, true),
+                _transport.MeshEndpoint.Port, _serviceVersion.ToString(), _options.Weight, true, _options.NodeName),
         };
         dtos.AddRange(coordinator.Sessions.Values.Select(s => s.Dto));
         return dtos;
@@ -422,6 +431,7 @@ internal sealed partial class CoLibraNode
                 ServiceVersion = version,
                 Weight = dto.Weight,
                 IsCoordinator = dto.IsCoordinator,
+                Name = dto.Name,
             });
         }
 

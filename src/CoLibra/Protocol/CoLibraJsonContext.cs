@@ -32,6 +32,8 @@ namespace CoLibra.Protocol;
 [JsonSerializable(typeof(LeaseAssignAckMessage))]
 [JsonSerializable(typeof(RoutedPayloadMessage))]
 [JsonSerializable(typeof(RoutedAckMessage))]
+[JsonSerializable(typeof(DirectMessageMessage))]
+[JsonSerializable(typeof(DirectMessageAckMessage))]
 internal sealed partial class CoLibraJsonContext : JsonSerializerContext
 {
     public static JsonTypeInfoResolverForMessages Resolver { get; } = new();
@@ -68,6 +70,8 @@ internal sealed class JsonTypeInfoResolverForMessages
         LeaseAssignAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseAssignAckMessage),
         RoutedPayloadMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.RoutedPayloadMessage),
         RoutedAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.RoutedAckMessage),
+        DirectMessageMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.DirectMessageMessage),
+        DirectMessageAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.DirectMessageAckMessage),
         _ => throw new NotSupportedException($"Unknown message type {message.GetType()}"),
     };
 
@@ -99,6 +103,8 @@ internal sealed class JsonTypeInfoResolverForMessages
         MessageType.LeaseAssignAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseAssignAckMessage),
         MessageType.RoutedPayload => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.RoutedPayloadMessage),
         MessageType.RoutedAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.RoutedAckMessage),
+        MessageType.DirectMessage => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.DirectMessageMessage),
+        MessageType.DirectMessageAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.DirectMessageAckMessage),
         _ => null, // unknown message types are ignored for forward compatibility
     };
 }

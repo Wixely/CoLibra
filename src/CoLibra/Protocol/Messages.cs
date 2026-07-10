@@ -46,6 +46,10 @@ internal enum MessageType : byte
     LeaseAssignAck = 63,
     RoutedPayload = 64,   // hybrid frame: JSON header + raw payload bytes (see FrameCodec)
     RoutedAck = 65,
+
+    // Direct node-to-node messaging
+    DirectMessage = 70,   // hybrid frame, like RoutedPayload
+    DirectMessageAck = 71,
 }
 
 internal abstract record Message
@@ -76,7 +80,8 @@ internal sealed record MemberDto(
     int Port,
     string ServiceVersion,
     double Weight,
-    bool IsCoordinator);
+    bool IsCoordinator,
+    string? Name = null);
 
 // ---------------------------------------------------------------------------
 // Discovery (UDP)
@@ -145,7 +150,8 @@ internal sealed record JoinRequestMessage(
     int MeshPort,
     IReadOnlyList<HeldLeaseDto> HeldLeases,
     bool SupportsCompletionSync = false,
-    IReadOnlyList<string>? RoutedTypes = null) : Message
+    IReadOnlyList<string>? RoutedTypes = null,
+    string? NodeName = null) : Message
 {
     public override MessageType Type => MessageType.JoinRequest;
 }
@@ -360,4 +366,37 @@ internal enum RouteAckStatus
 internal sealed record RoutedAckMessage(Guid RouteId, RouteAckStatus Status, Guid? RelayToNodeId) : Message
 {
     public override MessageType Type => MessageType.RoutedAck;
+}
+
+// ---------------------------------------------------------------------------
+// Direct node-to-node messaging
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// A node-addressed application message. Payload travels as raw bytes after the JSON header
+/// (hybrid frame). <see cref="RelayToNodeId"/> asks the receiving coordinator to forward.
+/// </summary>
+internal sealed record DirectMessageMessage(
+    Guid MessageId,
+    string Channel,
+    Guid OriginNodeId,
+    string? OriginName,
+    Guid? RelayToNodeId) : Message
+{
+    public override MessageType Type => MessageType.DirectMessage;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public byte[] Payload { get; init; } = [];
+}
+
+internal enum DirectAckStatus
+{
+    Delivered = 0,
+    NoHandler = 1,
+    Unreachable = 2,
+}
+
+internal sealed record DirectMessageAckMessage(Guid MessageId, DirectAckStatus Status, Guid? RelayToNodeId) : Message
+{
+    public override MessageType Type => MessageType.DirectMessageAck;
 }

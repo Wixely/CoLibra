@@ -126,6 +126,9 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
             SetState(ClusterState.Stopped);
             FailAllPending(LeaseDenialReason.NoCoordinator);
             FailAllPendingResolves();
+            foreach (var pendingAck in _pendingMessageAcks.Values.ToList())
+                pendingAck.TrySetResult(DirectAckStatus.Unreachable);
+            _pendingMessageAcks.Clear();
             foreach (var pooled in _directChannels.Values)
                 _ = pooled.Channel.DisposeAsync();
             _directChannels.Clear();

@@ -404,7 +404,8 @@ internal sealed partial class CoLibraNode
                 ProtocolConstants.ProtocolVersion, _serviceVersion.ToString(), _options.Weight,
                 _transport.MeshEndpoint.Port, heldDtos,
                 SupportsCompletionSync: _completions is not null,
-                RoutedTypes: _routedTypesSnapshot), ct).ConfigureAwait(false);
+                RoutedTypes: _routedTypesSnapshot,
+                NodeName: _options.NodeName), ct).ConfigureAwait(false);
 
             while (true)
             {
@@ -561,6 +562,7 @@ internal sealed partial class CoLibraNode
                 ServiceVersion = version,
                 Weight = dto.Weight,
                 IsCoordinator = dto.IsCoordinator,
+                Name = dto.Name,
             });
         }
 

@@ -47,6 +47,56 @@ public class RoutingProtocolTests
             $"frame {frame.Length} bytes suggests the payload was string-encoded");
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1_048_576)]
+    public async Task DirectMessage_round_trips_raw_bytes(int size)
+    {
+        var payload = new byte[size];
+        Random.Shared.NextBytes(payload);
+        var message = new DirectMessageMessage(Guid.NewGuid(), "chat", Guid.NewGuid(), "alice", Guid.NewGuid())
+        {
+            Payload = payload,
+        };
+
+        using var stream = new MemoryStream(FrameCodec.Encode(message));
+        var decoded = Assert.IsType<DirectMessageMessage>(
+            await FrameCodec.ReadAsync(stream, TestContext.Current.CancellationToken));
+
+        Assert.Equal(message.MessageId, decoded.MessageId);
+        Assert.Equal(message.Channel, decoded.Channel);
+        Assert.Equal(message.OriginNodeId, decoded.OriginNodeId);
+        Assert.Equal(message.OriginName, decoded.OriginName);
+        Assert.Equal(message.RelayToNodeId, decoded.RelayToNodeId);
+        Assert.Equal(payload, decoded.Payload);
+    }
+
+    [Fact]
+    public async Task DirectMessageAck_round_trips()
+    {
+        var message = new DirectMessageAckMessage(Guid.NewGuid(), DirectAckStatus.NoHandler, Guid.NewGuid());
+        using var stream = new MemoryStream(FrameCodec.Encode(message));
+        Assert.Equal(message, await FrameCodec.ReadAsync(stream, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void Messaging_options_validation()
+    {
+        var options = new CoLibraOptions { ServiceId = "svc", SharedSecret = "s" };
+        options.Messaging.Enabled = true;
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Succeeded);
+
+        options.Messaging.MaxPayloadBytes = 4 * 1024 * 1024;
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+
+        options.Messaging.MaxPayloadBytes = 1024;
+        options.NodeName = "";
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+
+        options.NodeName = "worker-7";
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Succeeded);
+    }
+
     [Fact]
     public async Task Other_routing_messages_round_trip()
     {

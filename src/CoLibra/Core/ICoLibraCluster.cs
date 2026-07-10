@@ -54,6 +54,12 @@ public interface ICoLibraCluster
     /// </summary>
     ICoLibraRouter Router { get; }
 
+    /// <summary>
+    /// Direct node-to-node messaging (requires <see cref="MessagingOptions.Enabled"/>; members
+    /// throw <see cref="InvalidOperationException"/> otherwise). See <see cref="ICoLibraMessenger"/>.
+    /// </summary>
+    ICoLibraMessenger Messenger { get; }
+
     /// <summary>The keys this node currently owns.</summary>
     IReadOnlyCollection<LeaseKey> HeldLeases { get; }
 

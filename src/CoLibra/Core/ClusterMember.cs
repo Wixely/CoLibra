@@ -17,6 +17,13 @@ public sealed record ClusterMember
     /// <summary>The member's advertised service version.</summary>
     public required Version ServiceVersion { get; init; }
 
+    /// <summary>
+    /// The member's application-defined name (<see cref="CoLibraOptions.NodeName"/>) — a machine
+    /// id, a username, whatever the service chooses. Null when the member didn't set one.
+    /// Names are not required to be unique; name-addressed messaging delivers to every match.
+    /// </summary>
+    public string? Name { get; init; }
+
     /// <summary>Relative capacity used by <see cref="LoadBalanceType.Weighted"/>.</summary>
     public double Weight { get; init; } = 1.0;
 

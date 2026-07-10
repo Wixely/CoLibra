@@ -10,6 +10,7 @@ CoLibra lets instances of the same service find each other on the network and ne
 - ⚖️ **Load balancing** — grants steer toward the least-loaded node per work type (equal or weighted), without ever revoking work in progress.
 - ✅ **Completion tracking (opt-in)** — `MarkCompletedAsync` replicates "this key is finished" to every node, so a dead node's finished work is never recomputed.
 - 📬 **Routed delivery (opt-in)** — for load-balancer/partitioned-queue topologies where only one node receives a message: any node can hand data to the cluster and it arrives at the key's owner, force-assigned on first contact.
+- 💬 **Node-to-node messaging (opt-in)** — send payloads directly to a node by id or by an app-defined name (machine id, username…); enough to build presence, control signals, or a whole chat app.
 - 🗳️ **1 to N nodes** — a single node coordinates itself; at 3+ nodes majority-quorum rules apply, with configurable split-brain behavior.
 - 🔐 **Secure by default** — discovery packets are HMAC-signed with your cluster secret and mesh traffic is TLS-encrypted with a self-signed certificate generated on first startup. Zero certificate setup.
 
@@ -169,6 +170,36 @@ The default serializer is System.Text.Json (no extra dependencies; pass your own
 
 If the key already has an owner, the payload goes there (in-process when it's you, over a pooled direct TLS channel otherwise, relayed via the coordinator as fallback). If the key is **unowned**, the coordinator force-assigns the lease to the least-loaded node that registered a handler for the type — the one deliberate exception to pull-only grants, safe because a registered handler proves the assignee can process. The first route for a key pays that assignment round-trip; after that the owner is cached locally. Delivery is at-least-once with acknowledgments: on `Timeout` you may retry and the handler may see a duplicate — `delivery.Token` (the fencing token) is provided for idempotency. Payloads travel as raw bytes (never base64) up to `MaxPayloadBytes`. See the [Router sample](samples/CoLibra.Sample.Router/).
 
+## Node-to-node messaging (opt-in)
+
+Sometimes nodes just need to talk to each other — control signals, presence, cache hints, or a full chat application. Enable `options.Messaging`, optionally give each node a name, and the member list becomes your address book:
+
+```csharp
+options.NodeName = "alice";          // any identifier the service chooses: username, machine id...
+options.Messaging.Enabled = true;
+```
+
+```csharp
+public sealed record ChatLine(string Text, DateTimeOffset At);
+
+// The inbox: one handler per channel (an app-defined label).
+await using var reg = cluster.Messenger.RegisterHandler<ChatLine>("chat", (message, ct) =>
+{
+    Console.WriteLine($"<{message.OriginName}> {message.Value.Text}");  // Origin = reply address
+    return ValueTask.CompletedTask;
+});
+
+// The address book: every member, with its name.
+foreach (var member in cluster.Members)
+    Console.WriteLine($"{member.Name} ({member.NodeId})");
+
+// Send by id (exact), or by name (delivers to every node bearing it):
+await cluster.Messenger.SendAsync(member.NodeId, "chat", new ChatLine("hi", DateTimeOffset.UtcNow));
+await cluster.Messenger.SendByNameAsync("bob", "chat", new ChatLine("hi bob", DateTimeOffset.UtcNow));
+```
+
+Names are advertised through membership (no directory service), need not be unique — `SendByNameAsync` returns one acknowledged result per match — and raw-byte overloads skip serialization just like routing. Sends are acknowledged (`Delivered` / `NoHandler` / `UnknownTarget` / `Timeout`) with at-least-once semantics, and payloads travel over the same encrypted paths as routed delivery: pooled direct member↔member channels with coordinator relay as fallback. Broadcast is deliberately just a loop over `Members` — see the [Chat sample](samples/CoLibra.Sample.Chat/) for a working terminal chat (`dotnet run -- --Name alice`).
+
 ## Completion tracking (opt-in)
 
 By default a finished piece of work is only remembered while its owner lives — if a node dies, even its *completed* keys become grantable again and get redone (at-least-once semantics). Enable `options.CompletionTracking` to remember completions cluster-wide:
@@ -233,6 +264,8 @@ Held leases keep renewing under every policy — a node never silently stops wor
 | `CompletionTracking.Enabled` / `.MaxEntriesPerType` / `.Retention` | `false` / 100 000 / null | Replicated "done" registry (see above). |
 | `Routing.Enabled` / `.MaxPayloadBytes` / `.DeliveryTimeout` | `false` / 1 MiB / 5 s | Routed delivery (see above). |
 | `Routing.UseDirectChannels` / `.IdleChannelTimeout` / `.OwnerCacheTtl` / `.AssignmentAckTimeout` | `true` / 60 s / 30 s / 2 s | Direct member↔member payload channels vs coordinator relay. |
+| `NodeName` | null | App-defined name shown on `ClusterMember.Name`, addressable via `SendByNameAsync`. |
+| `Messaging.Enabled` / `.MaxPayloadBytes` / `.DeliveryTimeout` / `.UseDirectChannels` | `false` / 1 MiB / 5 s / `true` | Node-to-node messaging (see above). |
 
 ## Networking notes
 

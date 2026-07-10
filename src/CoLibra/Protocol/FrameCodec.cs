@@ -13,8 +13,8 @@ internal static class FrameCodec
 {
     public static byte[] Encode(Message message)
     {
-        if (message is RoutedPayloadMessage routed)
-            return EncodeRouted(routed);
+        if (HybridPayloadOf(message) is { } body)
+            return EncodeHybrid(message, body);
 
         var payload = CoLibraJsonContext.Resolver.Serialize(message);
         var frame = new byte[4 + 2 + payload.Length];
@@ -25,14 +25,21 @@ internal static class FrameCodec
         return frame;
     }
 
-    private static byte[] EncodeRouted(RoutedPayloadMessage message)
+    /// <summary>Messages whose application payload rides as raw bytes after the JSON header.</summary>
+    private static byte[]? HybridPayloadOf(Message message) => message switch
     {
-        var header = CoLibraJsonContext.Resolver.Serialize(message); // Payload is [JsonIgnore]
-        var body = message.Payload;
+        RoutedPayloadMessage m => m.Payload,
+        DirectMessageMessage m => m.Payload,
+        _ => null,
+    };
+
+    private static byte[] EncodeHybrid(Message message, byte[] body)
+    {
+        var header = CoLibraJsonContext.Resolver.Serialize(message); // payload property is [JsonIgnore]
         var frame = new byte[4 + 2 + 4 + header.Length + body.Length];
         BinaryPrimitives.WriteInt32LittleEndian(frame, 2 + 4 + header.Length + body.Length);
         frame[4] = ProtocolConstants.ProtocolVersion;
-        frame[5] = (byte)MessageType.RoutedPayload;
+        frame[5] = (byte)message.Type;
         BinaryPrimitives.WriteInt32LittleEndian(frame.AsSpan(6), header.Length);
         header.CopyTo(frame.AsSpan(10));
         body.CopyTo(frame.AsSpan(10 + header.Length));
@@ -67,8 +74,8 @@ internal static class FrameCodec
             if (version != ProtocolConstants.ProtocolVersion)
                 throw new InvalidDataException($"Unsupported protocol version {version} (local {ProtocolConstants.ProtocolVersion}).");
 
-            if ((MessageType)body[1] == MessageType.RoutedPayload)
-                return DecodeRouted(body);
+            if ((MessageType)body[1] is MessageType.RoutedPayload or MessageType.DirectMessage)
+                return DecodeHybrid(body);
 
             var message = CoLibraJsonContext.Resolver.Deserialize((MessageType)body[1], body.AsSpan(2));
             if (message is not null)
@@ -76,17 +83,23 @@ internal static class FrameCodec
         }
     }
 
-    private static RoutedPayloadMessage DecodeRouted(byte[] body)
+    private static Message DecodeHybrid(byte[] body)
     {
         // body = [1B ver][1B type][4B header length][JSON header][raw payload]
+        var type = (MessageType)body[1];
         var headerLength = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2));
         if (headerLength < 2 || 6 + headerLength > body.Length)
-            throw new InvalidDataException($"Invalid routed-payload header length {headerLength}.");
+            throw new InvalidDataException($"Invalid hybrid-frame header length {headerLength}.");
 
-        var header = (RoutedPayloadMessage?)CoLibraJsonContext.Resolver.Deserialize(
-            MessageType.RoutedPayload, body.AsSpan(6, headerLength))
-            ?? throw new InvalidDataException("Unreadable routed-payload header.");
-        return header with { Payload = body[(6 + headerLength)..] };
+        var header = CoLibraJsonContext.Resolver.Deserialize(type, body.AsSpan(6, headerLength))
+            ?? throw new InvalidDataException($"Unreadable hybrid-frame header for {type}.");
+        var payload = body[(6 + headerLength)..];
+        return header switch
+        {
+            RoutedPayloadMessage m => m with { Payload = payload },
+            DirectMessageMessage m => m with { Payload = payload },
+            _ => throw new InvalidDataException($"Message type {type} is not hybrid-framed."),
+        };
     }
 
     private static async ValueTask<bool> TryReadExactAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)

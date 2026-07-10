@@ -1,0 +1,252 @@
+using System.Collections.Concurrent;
+using CoLibra.Protocol;
+using CoLibra.Transport;
+using Microsoft.Extensions.Logging;
+
+namespace CoLibra.Runtime;
+
+internal sealed partial class CoLibraNode : ICoLibraMessenger
+{
+    // ---- handler table (written from any thread via RegisterHandler; read on delivery) ----
+    private readonly ConcurrentDictionary<string, Func<ReceivedMessage, CancellationToken, ValueTask>> _messageHandlers =
+        new(StringComparer.Ordinal);
+
+    // ---- actor-owned messaging state ----
+    private readonly Dictionary<Guid, TaskCompletionSource<DirectAckStatus>> _pendingMessageAcks = [];
+
+    public ICoLibraMessenger Messenger => _options.Messaging.Enabled
+        ? this
+        : throw new InvalidOperationException(
+            "Node-to-node messaging is disabled; set CoLibraOptions.Messaging.Enabled = true to use the Messenger.");
+
+    // =====================================================================================
+    // Handler registration
+    // =====================================================================================
+
+    IAsyncDisposable ICoLibraMessenger.RegisterHandler(
+        string channel, Func<ReceivedMessage, CancellationToken, ValueTask> handler)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(channel);
+        ArgumentNullException.ThrowIfNull(handler);
+        if (!_messageHandlers.TryAdd(channel, handler))
+            throw new InvalidOperationException($"A message handler for channel '{channel}' is already registered on this node.");
+
+        return new MessageHandlerRegistration(this, channel);
+    }
+
+    IAsyncDisposable ICoLibraMessenger.RegisterHandler<T>(
+        string channel, Func<ReceivedMessage<T>, CancellationToken, ValueTask> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        var serializer = _options.Messaging.PayloadSerializer;
+        return ((ICoLibraMessenger)this).RegisterHandler(channel, (message, ct) =>
+        {
+            var value = serializer.Deserialize<T>(message.Payload)
+                ?? throw new InvalidDataException($"Message on channel '{channel}' deserialized to null as {typeof(T).Name}.");
+            return handler(new ReceivedMessage<T>
+            {
+                Channel = message.Channel,
+                Value = value,
+                Origin = message.Origin,
+                OriginName = message.OriginName,
+            }, ct);
+        });
+    }
+
+    private sealed class MessageHandlerRegistration(CoLibraNode node, string channel) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            node._messageHandlers.TryRemove(channel, out _);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    // =====================================================================================
+    // Sending
+    // =====================================================================================
+
+    ValueTask<SendResult> ICoLibraMessenger.SendAsync(
+        NodeId target, string channel, byte[] payload, CancellationToken cancellationToken) =>
+        ((ICoLibraMessenger)this).SendAsync(target, channel, (ReadOnlyMemory<byte>)payload, cancellationToken);
+
+    ValueTask<SendResult> ICoLibraMessenger.SendAsync<T>(
+        NodeId target, string channel, T value, CancellationToken cancellationToken) =>
+        ((ICoLibraMessenger)this).SendAsync(
+            target, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), cancellationToken);
+
+    async ValueTask<SendResult> ICoLibraMessenger.SendAsync(
+        NodeId target, string channel, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(channel);
+        if (payload.Length > _options.Messaging.MaxPayloadBytes)
+            return new SendResult(SendStatus.PayloadTooLarge, target);
+
+        // Self-send: deliver in-process, no network, no membership requirement.
+        if (target == LocalNodeId)
+        {
+            var localStatus = DeliverMessageLocal(channel, payload.ToArray(), LocalNodeId, _options.NodeName);
+            return new SendResult(localStatus == DirectAckStatus.Delivered ? SendStatus.Delivered : SendStatus.NoHandler, target);
+        }
+
+        var member = _members.FirstOrDefault(m => m.NodeId == target);
+        if (member is null)
+            return new SendResult(SendStatus.UnknownTarget, target);
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopping.Token);
+        timeout.CancelAfter(_options.Messaging.DeliveryTimeout);
+        try
+        {
+            var status = await SendDirectMessageAsync(member, channel, payload, timeout.Token).ConfigureAwait(false);
+            return new SendResult(status switch
+            {
+                DirectAckStatus.Delivered => SendStatus.Delivered,
+                DirectAckStatus.NoHandler => SendStatus.NoHandler,
+                _ => SendStatus.UnknownTarget,
+            }, target);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new SendResult(SendStatus.Timeout, target);
+        }
+    }
+
+    async ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.SendByNameAsync(
+        string name, string channel, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var targets = _members.Where(m => string.Equals(m.Name, name, StringComparison.Ordinal)).ToList();
+        if (targets.Count == 0)
+            return [];
+
+        var sends = targets.Select(m => ((ICoLibraMessenger)this).SendAsync(m.NodeId, channel, payload, cancellationToken).AsTask());
+        return await Task.WhenAll(sends).ConfigureAwait(false);
+    }
+
+    ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.SendByNameAsync<T>(
+        string name, string channel, T value, CancellationToken cancellationToken) =>
+        ((ICoLibraMessenger)this).SendByNameAsync(
+            name, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), cancellationToken);
+
+    private async Task<DirectAckStatus> SendDirectMessageAsync(
+        ClusterMember target, string channel, ReadOnlyMemory<byte> payload, CancellationToken ct)
+    {
+        var messageId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<DirectAckStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            IMessageChannel? direct = null;
+            if (_options.Messaging.UseDirectChannels && !_isCoordinatorRole)
+                direct = await GetOrCreateDirectChannelAsync(target.NodeId, target.Endpoint, ct).ConfigureAwait(false);
+
+            await PostWithResult<bool>(inner =>
+            {
+                _pendingMessageAcks[messageId] = tcs;
+                var message = new DirectMessageMessage(messageId, channel, LocalNodeId.Value, _options.NodeName, RelayToNodeId: null)
+                {
+                    Payload = payload.ToArray(),
+                };
+
+                if (_coordinator is { } coordinator)
+                {
+                    if (coordinator.Sessions.TryGetValue(target.NodeId, out var session))
+                        _ = SendSafeAsync(session.Connection, message with { RelayToNodeId = target.NodeId.Value });
+                    else
+                        CompleteMessageAck(new DirectMessageAckMessage(messageId, DirectAckStatus.Unreachable, null));
+                }
+                else if (direct is not null)
+                {
+                    _ = SendSafeAsync(direct, message);
+                }
+                else if (_member is { Connection: { } conn })
+                {
+                    _ = SendSafeAsync(conn, message with { RelayToNodeId = target.NodeId.Value });
+                }
+                else
+                {
+                    CompleteMessageAck(new DirectMessageAckMessage(messageId, DirectAckStatus.Unreachable, null));
+                }
+
+                inner.TrySetResult(true);
+                return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
+
+            return await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Post(() =>
+            {
+                _pendingMessageAcks.Remove(messageId);
+                return ValueTask.CompletedTask;
+            });
+        }
+    }
+
+    // =====================================================================================
+    // Delivery + relay (actor)
+    // =====================================================================================
+
+    private DirectAckStatus DeliverMessageLocal(string channel, byte[] payload, NodeId origin, string? originName)
+    {
+        if (!_options.Messaging.Enabled || !_messageHandlers.TryGetValue(channel, out var handler))
+            return DirectAckStatus.NoHandler;
+
+        var message = new ReceivedMessage
+        {
+            Channel = channel,
+            Payload = payload,
+            Origin = origin,
+            OriginName = originName,
+        };
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await handler(message, _stopping.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Message handler for channel '{Channel}' threw; delivery was already acknowledged", channel);
+            }
+        }, CancellationToken.None);
+        return DirectAckStatus.Delivered;
+    }
+
+    private void HandleDirectMessage(PeerConn peer, DirectMessageMessage message)
+    {
+        var origin = new NodeId(message.OriginNodeId);
+
+        if (message.RelayToNodeId is { } target && target != LocalNodeId.Value)
+        {
+            // Relay hop: forward to the target member, preserving RelayTo so it acks through us.
+            if (_coordinator is { } coordinator && coordinator.Sessions.TryGetValue(new NodeId(target), out var session))
+                _ = SendSafeAsync(session.Connection, message);
+            else
+                _ = SendSafeAsync(peer.Channel, new DirectMessageAckMessage(message.MessageId, DirectAckStatus.Unreachable, origin.Value));
+            return;
+        }
+
+        var status = DeliverMessageLocal(message.Channel, message.Payload, origin, message.OriginName);
+        var ackRelay = message.RelayToNodeId is not null && origin != LocalNodeId ? origin.Value : (Guid?)null;
+        _ = SendSafeAsync(peer.Channel, new DirectMessageAckMessage(message.MessageId, status, ackRelay));
+    }
+
+    private void HandleDirectMessageAck(PeerConn peer, DirectMessageAckMessage ack)
+    {
+        if (ack.RelayToNodeId is { } target && target != LocalNodeId.Value)
+        {
+            if (_coordinator is { } coordinator && coordinator.Sessions.TryGetValue(new NodeId(target), out var session))
+                _ = SendSafeAsync(session.Connection, ack with { RelayToNodeId = null });
+            return;
+        }
+
+        CompleteMessageAck(ack);
+    }
+
+    private void CompleteMessageAck(DirectMessageAckMessage ack)
+    {
+        if (_pendingMessageAcks.Remove(ack.MessageId, out var tcs))
+            tcs.TrySetResult(ack.Status);
+    }
+}

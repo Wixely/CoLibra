@@ -84,6 +84,21 @@ internal sealed class CoLibraOptionsValidator : IValidateOptions<CoLibraOptions>
                 failures.Add("Routing.PayloadSerializer must not be null.");
         }
 
+        if (options.Messaging.Enabled)
+        {
+            if (options.Messaging.MaxPayloadBytes is < 1 or > 3 * 1024 * 1024)
+                failures.Add("Messaging.MaxPayloadBytes must be 1 byte to 3 MiB (frame-limit headroom).");
+
+            if (options.Messaging.DeliveryTimeout <= TimeSpan.Zero)
+                failures.Add("Messaging.DeliveryTimeout must be positive.");
+
+            if (options.Messaging.PayloadSerializer is null)
+                failures.Add("Messaging.PayloadSerializer must not be null.");
+        }
+
+        if (options.NodeName is { } nodeName && (nodeName.Length == 0 || nodeName.Length > 256))
+            failures.Add("NodeName must be 1-256 characters when set.");
+
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;

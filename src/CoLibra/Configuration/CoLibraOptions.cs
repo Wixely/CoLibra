@@ -26,6 +26,14 @@ public sealed class CoLibraOptions
     /// <summary>Fixed node identity; leave null for an auto-generated GUID v7 per process.</summary>
     public Guid? NodeId { get; set; }
 
+    /// <summary>
+    /// Optional application-defined name for this node — a machine id, a username, anything.
+    /// Advertised to all members (visible on <see cref="ClusterMember.Name"/>) and addressable
+    /// via <see cref="ICoLibraMessenger.SendByNameAsync"/>. Need not be unique: name-addressed
+    /// messages are delivered to every node bearing the name.
+    /// </summary>
+    public string? NodeName { get; set; }
+
     /// <summary>UDP port for discovery. All CoLibra services on a machine can share it (bound with ReuseAddress). Default 41100.</summary>
     public int DiscoveryPort { get; set; } = 41100;
 
@@ -127,6 +135,12 @@ public sealed class CoLibraOptions
     /// an owner when the key is free. See <see cref="RoutingOptions"/>.
     /// </summary>
     public RoutingOptions Routing { get; } = new();
+
+    /// <summary>
+    /// Opt-in direct node-to-node messaging (<see cref="ICoLibraCluster.Messenger"/>): send
+    /// payloads to a specific node by id or by <see cref="NodeName"/>. See <see cref="MessagingOptions"/>.
+    /// </summary>
+    public MessagingOptions Messaging { get; } = new();
 
     internal Version ResolveServiceVersion() =>
         ServiceVersion
