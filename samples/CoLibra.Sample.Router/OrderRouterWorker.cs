@@ -1,8 +1,10 @@
-using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace CoLibra.Sample.Router;
+
+/// <summary>The payload routed between nodes — serialized by the configured IRoutedPayloadSerializer (System.Text.Json by default).</summary>
+internal sealed record OrderUpdate(string Channel, double Value, DateTimeOffset At);
 
 /// <summary>
 /// Simulates one node behind a load balancer: an ingress loop generates order updates that
@@ -28,11 +30,12 @@ internal sealed class OrderRouterWorker(ICoLibraCluster cluster, ILogger<OrderRo
         await cluster.WaitForClusterAsync(stoppingToken);
 
         // Registering the handler advertises this node as an assignment candidate for "order".
-        await using var registration = cluster.Router.RegisterHandler("order", (delivery, _) =>
+        // The typed overload deserializes each payload back into an OrderUpdate.
+        await using var registration = cluster.Router.RegisterHandler<OrderUpdate>("order", (delivery, _) =>
         {
             Interlocked.Increment(ref _processed);
-            logger.LogDebug("Processing {Order}: {Update} (from {Origin})",
-                delivery.Key.Id, Encoding.UTF8.GetString(delivery.Payload.Span), delivery.Origin);
+            logger.LogDebug("Processing {Order}: {Channel}={Value} at {At} (from {Origin})",
+                delivery.Key.Id, delivery.Value.Channel, delivery.Value.Value, delivery.Value.At, delivery.Origin);
             return ValueTask.CompletedTask;
         });
         logger.LogInformation("Up as {State}; ingesting updates for {Orders} orders", cluster.State, OrderCount);
@@ -45,7 +48,7 @@ internal sealed class OrderRouterWorker(ICoLibraCluster cluster, ILogger<OrderRo
             {
                 // This update arrived at THIS node only (the "load balancer" picked us).
                 var orderId = $"order_{random.Next(1, OrderCount + 1):D3}";
-                var update = Encoding.UTF8.GetBytes($"price-update@{DateTimeOffset.UtcNow:HH:mm:ss.fff}");
+                var update = new OrderUpdate("channel-a", Math.Round(random.NextDouble() * 100, 2), DateTimeOffset.UtcNow);
                 Interlocked.Increment(ref _received);
 
                 var result = await cluster.Router.RouteAsync("order", orderId, update, stoppingToken);

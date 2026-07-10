@@ -1,0 +1,53 @@
+name: Release
+
+# Tag a commit vX.Y.Z (e.g. `git tag v0.2.0 && git push origin v0.2.0`) and this workflow
+# builds, tests, packs the NuGet package and a DLL zip, and attaches both to a GitHub Release.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Derive version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+      - name: Pack NuGet package
+        run: >
+          dotnet pack src/CoLibra/CoLibra.csproj --configuration Release
+          -p:Version=${{ env.VERSION }} -p:ContinuousIntegrationBuild=true
+          --output artifacts
+
+      - name: Publish DLL bundle
+        run: |
+          dotnet publish src/CoLibra/CoLibra.csproj --configuration Release -p:Version=${{ env.VERSION }} --output publish
+          cp LICENSE README.md publish/
+          mkdir -p artifacts
+          (cd publish && zip "../artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip" CoLibra.dll CoLibra.pdb CoLibra.xml LICENSE README.md)
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          artifacts/CoLibra.${{ env.VERSION }}.nupkg
+          "artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip"
+          --title "CoLibra ${{ env.VERSION }}"
+          --generate-notes
+
+      # To also publish to nuget.org: add a NUGET_API_KEY repository secret and uncomment.
+      # - name: Push to NuGet.org
+      #   run: dotnet nuget push artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json

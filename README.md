@@ -15,6 +15,43 @@ CoLibra lets instances of the same service find each other on the network and ne
 
 MIT licensed. One package, no third-party dependencies.
 
+## Installing
+
+**From a GitHub Release** (produced automatically for every `vX.Y.Z` tag — grab the assets from the [Releases page](../../releases)):
+
+- `CoLibra.X.Y.Z.nupkg` — add the download folder as a local NuGet source and reference the package:
+
+  ```
+  dotnet nuget add source C:\path\to\downloads --name colibra-local
+  dotnet add package CoLibra --version X.Y.Z
+  ```
+
+- `CoLibra-X.Y.Z-net10.0.zip` — the raw `CoLibra.dll` (plus XML docs and symbols) for direct referencing when a package feed isn't an option:
+
+  ```xml
+  <ItemGroup>
+    <Reference Include="CoLibra">
+      <HintPath>libs\CoLibra.dll</HintPath>
+    </Reference>
+    <!-- CoLibra's only dependencies are Microsoft.Extensions abstractions: -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.*" />
+  </ItemGroup>
+  ```
+
+  The NuGet package is the recommended route — it wires those dependencies up for you.
+
+**From source**: `dotnet pack src/CoLibra/CoLibra.csproj -c Release -o out` and consume the resulting nupkg the same way.
+
+**Cutting a release** (maintainers): tag the commit and push the tag — the [Release workflow](.github/workflows/release.yml) builds, runs the full test suite, and attaches both artifacts to a GitHub Release, versioned from the tag:
+
+```
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Publishing to nuget.org is one commented-out step in the same workflow (needs a `NUGET_API_KEY` repository secret).
+
 ## Quick start
 
 ```csharp
