@@ -1,0 +1,11 @@
+{
+  // CoLibra.Sample.PrimeGrid settings. Command-line arguments override these
+  // (e.g. --Target 100000000 --RangeSize 500000).
+  // IMPORTANT: every instance in the cluster must use the SAME RangeSize.
+
+  // Count primes below this number.
+  "Target": 2000000000,
+
+  // Numbers per work bucket; smaller buckets suit slower machines.
+  "RangeSize": 1000000
+}

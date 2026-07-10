@@ -24,6 +24,10 @@ internal static class Program
     private static async Task Main(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
+        // Sample-specific config file so all demos can coexist in one folder (a plain
+        // appsettings.json would apply to every executable); command line still wins.
+        builder.Configuration.AddJsonFile("gameserver.json", optional: true, reloadOnChange: false);
+        builder.Configuration.AddCommandLine(args);
 
         builder.Logging.ClearProviders();
         builder.Logging.AddSimpleConsole(o =>

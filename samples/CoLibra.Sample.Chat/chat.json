@@ -1,0 +1,15 @@
+{
+  // CoLibra.Sample.Chat settings. Command-line arguments override these
+  // (e.g. --Name alice --Udp true). Delete or edit freely.
+
+  // Your chat name; also the address others use with '@name message'.
+  // Default when unset: your OS username plus a random suffix.
+  //"Name": "alice",
+
+  // Use the resilient-UDP data plane (chat stays reliable; a 20 Hz Sequenced
+  // "positions" channel streams alongside it). Peers without UDP still work via TCP.
+  "Udp": false
+
+  // Headless demo mode: broadcast this text every 3 seconds.
+  //"Say": "hello from a bot"
+}

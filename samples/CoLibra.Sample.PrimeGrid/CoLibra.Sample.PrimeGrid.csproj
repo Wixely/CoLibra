@@ -13,4 +13,8 @@
     <ProjectReference Include="..\..\src\CoLibra\CoLibra.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="primegrid.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

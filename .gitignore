@@ -7,3 +7,4 @@ artifacts/
 TestResults/
 *.pfx
 *.log
+samples-publish/

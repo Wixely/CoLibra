@@ -1,0 +1,12 @@
+{
+  // CoLibra.Sample.GameServer settings. Command-line arguments override these
+  // (e.g. --Server true, --Name player1).
+
+  // true = run as THE game server: forced coordinator, accepts no zone work,
+  // aggregates player scores and force-rebalances when players join or leave.
+  // false = run as a player: never coordinates, works zone leases, reports scores.
+  "Server": false
+
+  // Player name (ignored when Server = true; the server is always "game-server").
+  //"Name": "player1"
+}

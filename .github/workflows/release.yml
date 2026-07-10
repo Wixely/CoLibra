@@ -53,6 +53,17 @@ jobs:
           mkdir -p artifacts
           (cd publish && zip "../artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip" CoLibra.dll CoLibra.pdb CoLibra.xml CoLibra.Messaging.LiteNetLib.dll CoLibra.Messaging.LiteNetLib.xml LICENSE README.md THIRD-PARTY-NOTICES.txt)
 
+      - name: Publish samples bundle
+        run: |
+          # All five demos into ONE folder: shared CoLibra/runtime deps dedupe, and each
+          # sample reads its own named config (chat.json, gameserver.json, primegrid.json).
+          for sample in Worker PrimeGrid Router Chat GameServer; do
+            dotnet publish "samples/CoLibra.Sample.$sample/CoLibra.Sample.$sample.csproj" \
+              --configuration Release -p:Version=${{ env.VERSION }} --output samples-publish
+          done
+          cp samples/SAMPLES-README.txt LICENSE THIRD-PARTY-NOTICES.txt samples-publish/
+          (cd samples-publish && zip -r "../artifacts/CoLibra-Samples-${{ env.VERSION }}.zip" .)
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,6 +72,7 @@ jobs:
           artifacts/CoLibra.${{ env.VERSION }}.nupkg
           artifacts/CoLibra.Messaging.LiteNetLib.${{ env.VERSION }}.nupkg
           "artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip"
+          "artifacts/CoLibra-Samples-${{ env.VERSION }}.zip"
           --title "CoLibra ${{ env.VERSION }}"
           --generate-notes
 

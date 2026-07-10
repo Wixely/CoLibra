@@ -14,4 +14,8 @@
     <ProjectReference Include="..\..\src\CoLibra.Messaging.LiteNetLib\CoLibra.Messaging.LiteNetLib.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="chat.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -13,4 +13,8 @@
     <ProjectReference Include="..\..\src\CoLibra\CoLibra.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="gameserver.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
