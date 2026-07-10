@@ -24,7 +24,8 @@ public static class CoLibraServiceCollectionExtensions
         services.TryAddSingleton(sp => new CoLibraNode(
             sp.GetRequiredService<IOptions<CoLibraOptions>>().Value,
             sp.GetRequiredService<ILoggerFactory>().CreateLogger("CoLibra"),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            udpEngine: sp.GetService<IUdpMessagingEngine>()));
         services.TryAddSingleton<ICoLibraCluster>(sp => sp.GetRequiredService<CoLibraNode>());
         services.AddHostedService<CoLibraHostedService>();
         return services;

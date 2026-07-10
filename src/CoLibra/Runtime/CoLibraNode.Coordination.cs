@@ -113,6 +113,15 @@ internal sealed partial class CoLibraNode
             case DirectMessageAckMessage m:
                 HandleDirectMessageAck(peer, m);
                 break;
+
+            // ---- UDP data-plane link establishment ----
+            case UdpLinkOfferMessage m:
+                HandleUdpLinkOffer(peer, m);
+                break;
+
+            case UdpLinkAcceptMessage m:
+                HandleUdpLinkAccept(peer, m);
+                break;
         }
     }
 
@@ -270,7 +279,8 @@ internal sealed partial class CoLibraNode
             Incarnation = peer.PeerIncarnation,
             Connection = peer.Channel,
             Dto = new MemberDto(peer.PeerId.Value, peer.PeerIncarnation, remoteAddress.ToString(),
-                request.MeshPort, request.ServiceVersion, request.Weight, false, request.NodeName, request.AcceptsWork),
+                request.MeshPort, request.ServiceVersion, request.Weight, false, request.NodeName, request.AcceptsWork,
+                WireId: coordinator.NextWireId++, UdpPort: request.UdpPort),
             LastSeenTs = now,
             SupportsCompletionSync = request.SupportsCompletionSync,
             RoutedTypes = request.RoutedTypes ?? [],
@@ -412,7 +422,7 @@ internal sealed partial class CoLibraNode
         {
             new(LocalNodeId.Value, _incarnation, _transport.MeshEndpoint.Address.ToString(),
                 _transport.MeshEndpoint.Port, _serviceVersion.ToString(), _options.Weight, true, _options.NodeName,
-                _acceptWork),
+                _acceptWork, WireId: 1, UdpPort: _udpListenPort),
         };
         dtos.AddRange(coordinator.Sessions.Values.Select(s => s.Dto));
         return dtos;
@@ -438,10 +448,13 @@ internal sealed partial class CoLibraNode
                 IsCoordinator = dto.IsCoordinator,
                 Name = dto.Name,
                 AcceptsWork = dto.AcceptsWork,
+                WireId = dto.WireId,
+                UdpPort = dto.UdpPort,
             });
         }
 
         _members = next;
+        _myWireId = 1;
         _lastKnownClusterSize = next.Count + coordinator.RecentlyDeparted.Count;
         RaiseMembershipDiff(previous, next);
 
@@ -658,6 +671,7 @@ internal sealed partial class CoLibraNode
         _coordinator = coordinator;
         _highestTerm = Math.Max(_highestTerm, term);
         _negativeCache.Clear();
+        CloseAllUdpLinks("became coordinator (term/wire-id scope changed)");
         Volatile.Write(ref _lastAckTimestamp, now);
         SetState(ClusterState.Coordinator);
         _logger.LogInformation("Became coordinator for term {Term}", term);
@@ -734,6 +748,7 @@ internal sealed partial class CoLibraNode
         TickPendingTimeouts(now);
         TickLocalLeaseExpiry();
         TickDirectChannels(now);
+        TickUdpLinks();
 
         if (_completions is not null && Since(_lastCompletionTrimTs) >= CompletionTrimInterval)
         {

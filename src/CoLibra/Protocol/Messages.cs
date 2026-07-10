@@ -50,6 +50,10 @@ internal enum MessageType : byte
     // Direct node-to-node messaging
     DirectMessage = 70,   // hybrid frame, like RoutedPayload
     DirectMessageAck = 71,
+
+    // UDP data-plane link establishment (key exchange rides the TCP mesh)
+    UdpLinkOffer = 74,
+    UdpLinkAccept = 75,
 }
 
 internal abstract record Message
@@ -82,7 +86,9 @@ internal sealed record MemberDto(
     double Weight,
     bool IsCoordinator,
     string? Name = null,
-    bool AcceptsWork = true);
+    bool AcceptsWork = true,
+    int WireId = 0,
+    int UdpPort = 0);
 
 // ---------------------------------------------------------------------------
 // Discovery (UDP)
@@ -155,7 +161,8 @@ internal sealed record JoinRequestMessage(
     bool SupportsCompletionSync = false,
     IReadOnlyList<string>? RoutedTypes = null,
     string? NodeName = null,
-    bool AcceptsWork = true) : Message
+    bool AcceptsWork = true,
+    int UdpPort = 0) : Message
 {
     public override MessageType Type => MessageType.JoinRequest;
 }
@@ -386,7 +393,8 @@ internal sealed record DirectMessageMessage(
     string Channel,
     Guid OriginNodeId,
     string? OriginName,
-    Guid? RelayToNodeId) : Message
+    Guid? RelayToNodeId,
+    bool WantAck = true) : Message
 {
     public override MessageType Type => MessageType.DirectMessage;
 
@@ -404,4 +412,33 @@ internal enum DirectAckStatus
 internal sealed record DirectMessageAckMessage(Guid MessageId, DirectAckStatus Status, Guid? RelayToNodeId) : Message
 {
     public override MessageType Type => MessageType.DirectMessageAck;
+}
+
+/// <summary>
+/// Initiates a UDP data-plane link: carries the initiator's nonce, UDP endpoint port and its
+/// receive-channel table (registered handler channels → compact ids). Sent over the TCP mesh
+/// (direct or coordinator-relayed), which is what makes the key exchange trustworthy.
+/// </summary>
+internal sealed record UdpLinkOfferMessage(
+    Guid LinkId,
+    Guid OriginNodeId,
+    Guid? RelayToNodeId,
+    long Term,
+    byte[] Nonce,
+    int UdpPort,
+    Dictionary<string, byte> Channels) : Message
+{
+    public override MessageType Type => MessageType.UdpLinkOffer;
+}
+
+internal sealed record UdpLinkAcceptMessage(
+    Guid LinkId,
+    Guid OriginNodeId,
+    Guid? RelayToNodeId,
+    bool Accepted,
+    byte[] Nonce,
+    int UdpPort,
+    Dictionary<string, byte> Channels) : Message
+{
+    public override MessageType Type => MessageType.UdpLinkAccept;
 }

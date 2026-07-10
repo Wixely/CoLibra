@@ -27,6 +27,7 @@ internal sealed partial class CoLibraNode
         public Dictionary<NodeId, long> RecentlyDeparted { get; } = [];
         public List<LeaseKeyDto> PendingCompletionSync { get; } = [];
         public Dictionary<LeaseKey, PendingAssignment> PendingAssignments { get; } = [];
+        public int NextWireId { get; set; } = 2; // 1 = the coordinator itself, 0 = unassigned
 
         public void DisposeAllSessions()
         {
@@ -444,7 +445,8 @@ internal sealed partial class CoLibraNode
                 SupportsCompletionSync: _completions is not null,
                 RoutedTypes: _routedTypesSnapshot,
                 NodeName: _options.NodeName,
-                AcceptsWork: _acceptWork), ct).ConfigureAwait(false);
+                AcceptsWork: _acceptWork,
+                UdpPort: _udpListenPort), ct).ConfigureAwait(false);
 
             while (true)
             {
@@ -524,6 +526,7 @@ internal sealed partial class CoLibraNode
         Volatile.Write(ref _lastAckTimestamp, now);
         _negativeCache.Clear();
         _ownerCache.Clear(); // owners resolved under the previous coordinator may be stale
+        CloseAllUdpLinks("joined a coordinator (term/wire-id scope changed)");
         ApplyMembership(response.Members, coordinatorId, endpoint.Address);
         SetState(ClusterState.Member);
 
@@ -603,10 +606,13 @@ internal sealed partial class CoLibraNode
                 IsCoordinator = dto.IsCoordinator,
                 Name = dto.Name,
                 AcceptsWork = dto.AcceptsWork,
+                WireId = dto.WireId,
+                UdpPort = dto.UdpPort,
             });
         }
 
         _members = next;
+        _myWireId = next.FirstOrDefault(m => m.NodeId == LocalNodeId)?.WireId ?? 0;
         _lastKnownClusterSize = Math.Max(next.Count, 1);
         RaiseMembershipDiff(previous, next);
     }

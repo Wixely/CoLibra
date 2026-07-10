@@ -32,4 +32,13 @@ public sealed record ClusterMember
 
     /// <summary>Whether this member accepts work leases (see <see cref="CoLibraOptions.AcceptWork"/>).</summary>
     public bool AcceptsWork { get; init; } = true;
+
+    /// <summary>
+    /// Compact per-term node id assigned by the coordinator, used in UDP data-plane packet
+    /// headers instead of the 16-byte <see cref="NodeId"/>. 0 = none assigned.
+    /// </summary>
+    public int WireId { get; init; }
+
+    /// <summary>The member's UDP data-plane port; 0 when the member has no UDP engine.</summary>
+    public int UdpPort { get; init; }
 }

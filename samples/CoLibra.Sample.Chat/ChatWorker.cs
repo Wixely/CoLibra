@@ -6,6 +6,9 @@ namespace CoLibra.Sample.Chat;
 /// <summary>The typed payload exchanged between participants.</summary>
 internal sealed record ChatLine(string Text, DateTimeOffset At);
 
+/// <summary>Game-style state: streamed Sequenced at 20 Hz in --Udp mode; only the newest matters.</summary>
+internal sealed record Position(double X, double Y, long Tick);
+
 internal sealed class ChatWorker(
     ICoLibraCluster cluster,
     ChatSettings settings,
@@ -39,10 +42,66 @@ internal sealed class ChatWorker(
         logger.LogInformation("Connected. {Count} participant(s) online. Type to chat, '@name text' for direct, /who, /quit.",
             cluster.Members.Count);
 
-        if (Console.IsInputRedirected)
-            await RunHeadlessAsync(stoppingToken);
-        else
-            await RunInteractiveAsync(stoppingToken);
+        // In --Udp mode, also stream game-style position updates: Sequenced, 20 Hz, latest-wins.
+        IAsyncDisposable? positionsRegistration = null;
+        Task positions = Task.CompletedTask;
+        if (settings.Udp)
+        {
+            var latest = new System.Collections.Concurrent.ConcurrentDictionary<string, Position>();
+            positionsRegistration = cluster.Messenger.RegisterHandler<Position>("positions", (m, _) =>
+            {
+                latest[m.OriginName ?? m.Origin.ToString()] = m.Value;
+                return ValueTask.CompletedTask;
+            });
+            positions = StreamPositionsAsync(latest, stoppingToken);
+        }
+
+        try
+        {
+            if (Console.IsInputRedirected)
+                await RunHeadlessAsync(stoppingToken);
+            else
+                await RunInteractiveAsync(stoppingToken);
+        }
+        finally
+        {
+            await positions.ContinueWith(_ => { }, CancellationToken.None);
+            if (positionsRegistration is not null)
+                await positionsRegistration.DisposeAsync();
+        }
+    }
+
+    private async Task StreamPositionsAsync(
+        System.Collections.Concurrent.ConcurrentDictionary<string, Position> latest, CancellationToken ct)
+    {
+        var random = new Random();
+        var (x, y) = (random.NextDouble() * 100, random.NextDouble() * 100);
+        long tick = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), ct); // 20 Hz
+                x += random.NextDouble() - 0.5;
+                y += random.NextDouble() - 0.5;
+                var mine = new Position(Math.Round(x, 2), Math.Round(y, 2), ++tick);
+                foreach (var member in cluster.Members.Where(m => m.NodeId != cluster.LocalNodeId))
+                {
+                    // Sequenced: no retransmit, late packets dropped — only the newest state matters.
+                    await cluster.Messenger.SendAsync(member.NodeId, "positions", mine,
+                        MessageDelivery.Sequenced, ct);
+                }
+
+                if (tick % 100 == 0) // every ~5 s, show what we know about everyone
+                {
+                    foreach (var (who, position) in latest.OrderBy(kv => kv.Key))
+                        logger.LogInformation("  {Who} at ({X}, {Y}) tick {Tick}", who, position.X, position.Y, position.Tick);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     /// <summary>Broadcast = one direct send per member; the member list is the address book.</summary>
@@ -51,7 +110,7 @@ internal sealed class ChatWorker(
         var line = new ChatLine(text, DateTimeOffset.UtcNow);
         foreach (var member in cluster.Members.Where(m => m.NodeId != cluster.LocalNodeId))
         {
-            var result = await cluster.Messenger.SendAsync(member.NodeId, "chat", line, ct);
+            var result = await cluster.Messenger.SendAsync(member.NodeId, "chat", line, cancellationToken: ct);
             if (!result.Delivered)
                 logger.LogWarning("(to {Name}: {Status})", member.Name ?? member.NodeId.ToString(), result.Status);
         }
@@ -88,7 +147,7 @@ internal sealed class ChatWorker(
                 var target = input[1..space];
                 var text = input[(space + 1)..];
                 var results = await cluster.Messenger.SendByNameAsync(
-                    target, "chat", new ChatLine(text, DateTimeOffset.UtcNow), ct);
+                    target, "chat", new ChatLine(text, DateTimeOffset.UtcNow), cancellationToken: ct);
                 if (results.Count == 0)
                     logger.LogWarning("(nobody here is named '{Target}' — /who lists participants)", target);
                 continue;

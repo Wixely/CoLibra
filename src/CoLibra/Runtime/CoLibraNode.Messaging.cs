@@ -67,16 +67,16 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
     // =====================================================================================
 
     ValueTask<SendResult> ICoLibraMessenger.SendAsync(
-        NodeId target, string channel, byte[] payload, CancellationToken cancellationToken) =>
-        ((ICoLibraMessenger)this).SendAsync(target, channel, (ReadOnlyMemory<byte>)payload, cancellationToken);
+        NodeId target, string channel, byte[] payload, MessageDelivery delivery, CancellationToken cancellationToken) =>
+        ((ICoLibraMessenger)this).SendAsync(target, channel, (ReadOnlyMemory<byte>)payload, delivery, cancellationToken);
 
     ValueTask<SendResult> ICoLibraMessenger.SendAsync<T>(
-        NodeId target, string channel, T value, CancellationToken cancellationToken) =>
+        NodeId target, string channel, T value, MessageDelivery delivery, CancellationToken cancellationToken) =>
         ((ICoLibraMessenger)this).SendAsync(
-            target, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), cancellationToken);
+            target, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), delivery, cancellationToken);
 
     async ValueTask<SendResult> ICoLibraMessenger.SendAsync(
-        NodeId target, string channel, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        NodeId target, string channel, ReadOnlyMemory<byte> payload, MessageDelivery delivery, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(channel);
         if (payload.Length > _options.Messaging.MaxPayloadBytes)
@@ -86,6 +86,8 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
         if (target == LocalNodeId)
         {
             var localStatus = DeliverMessageLocal(channel, payload.ToArray(), LocalNodeId, _options.NodeName);
+            if (!IsAckedDelivery(delivery))
+                return new SendResult(SendStatus.Sent, target);
             return new SendResult(localStatus == DirectAckStatus.Delivered ? SendStatus.Delivered : SendStatus.NoHandler, target);
         }
 
@@ -114,9 +116,10 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
             return new SendResult(SendStatus.UnknownTarget, target);
         try
         {
-            var status = await SendDirectMessageAsync(member, channel, payload, timeout.Token).ConfigureAwait(false);
+            var status = await SendDirectMessageAsync(member, channel, payload, delivery, timeout.Token).ConfigureAwait(false);
             return new SendResult(status switch
             {
+                DirectAckStatus.Delivered when !IsAckedDelivery(delivery) => SendStatus.Sent,
                 DirectAckStatus.Delivered => SendStatus.Delivered,
                 DirectAckStatus.NoHandler => SendStatus.NoHandler,
                 _ => SendStatus.UnknownTarget,
@@ -129,25 +132,38 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
     }
 
     async ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.SendByNameAsync(
-        string name, string channel, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        string name, string channel, ReadOnlyMemory<byte> payload, MessageDelivery delivery, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         var targets = _members.Where(m => string.Equals(m.Name, name, StringComparison.Ordinal)).ToList();
         if (targets.Count == 0)
             return [];
 
-        var sends = targets.Select(m => ((ICoLibraMessenger)this).SendAsync(m.NodeId, channel, payload, cancellationToken).AsTask());
+        var sends = targets.Select(m => ((ICoLibraMessenger)this).SendAsync(m.NodeId, channel, payload, delivery, cancellationToken).AsTask());
         return await Task.WhenAll(sends).ConfigureAwait(false);
     }
 
     ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.SendByNameAsync<T>(
-        string name, string channel, T value, CancellationToken cancellationToken) =>
+        string name, string channel, T value, MessageDelivery delivery, CancellationToken cancellationToken) =>
         ((ICoLibraMessenger)this).SendByNameAsync(
-            name, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), cancellationToken);
+            name, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), delivery, cancellationToken);
+
+    private static bool IsAckedDelivery(MessageDelivery delivery) =>
+        delivery is MessageDelivery.ReliableOrdered or MessageDelivery.Reliable;
 
     private async Task<DirectAckStatus> SendDirectMessageAsync(
-        ClusterMember target, string channel, ReadOnlyMemory<byte> payload, CancellationToken ct)
+        ClusterMember target, string channel, ReadOnlyMemory<byte> payload, MessageDelivery delivery, CancellationToken ct)
     {
+        var wantAck = IsAckedDelivery(delivery);
+
+        // Prefer the UDP data plane when available; a null result falls through to TCP.
+        if (UdpEligible(target, payload))
+        {
+            var udpStatus = await TrySendUdpAsync(target, channel, payload, delivery, wantAck, ct).ConfigureAwait(false);
+            if (udpStatus is { } status)
+                return status;
+        }
+
         var messageId = Guid.NewGuid();
         var tcs = new TaskCompletionSource<DirectAckStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
@@ -158,8 +174,10 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
 
             await PostWithResult<bool>(inner =>
             {
-                _pendingMessageAcks[messageId] = tcs;
-                var message = new DirectMessageMessage(messageId, channel, LocalNodeId.Value, _options.NodeName, RelayToNodeId: null)
+                if (wantAck)
+                    _pendingMessageAcks[messageId] = tcs;
+                var message = new DirectMessageMessage(messageId, channel, LocalNodeId.Value, _options.NodeName,
+                    RelayToNodeId: null, WantAck: wantAck)
                 {
                     Payload = payload.ToArray(),
                 };
@@ -188,15 +206,21 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
                 return ValueTask.CompletedTask;
             }).ConfigureAwait(false);
 
+            if (!wantAck)
+                return DirectAckStatus.Delivered; // fire-and-forget: mapped to SendStatus.Sent by the caller
+
             return await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
         }
         finally
         {
-            Post(() =>
+            if (wantAck)
             {
-                _pendingMessageAcks.Remove(messageId);
-                return ValueTask.CompletedTask;
-            });
+                Post(() =>
+                {
+                    _pendingMessageAcks.Remove(messageId);
+                    return ValueTask.CompletedTask;
+                });
+            }
         }
     }
 
@@ -245,6 +269,9 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
         }
 
         var status = DeliverMessageLocal(message.Channel, message.Payload, origin, message.OriginName);
+        if (!message.WantAck)
+            return; // fire-and-forget delivery: the sender isn't waiting
+
         var ackRelay = message.RelayToNodeId is not null && origin != LocalNodeId ? origin.Value : (Guid?)null;
         _ = SendSafeAsync(peer.Channel, new DirectMessageAckMessage(message.MessageId, status, ackRelay));
     }

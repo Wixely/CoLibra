@@ -94,6 +94,18 @@ internal sealed class CoLibraOptionsValidator : IValidateOptions<CoLibraOptions>
 
             if (options.Messaging.PayloadSerializer is null)
                 failures.Add("Messaging.PayloadSerializer must not be null.");
+
+            if (options.Messaging.UdpPort is < 0 or > 65535)
+                failures.Add("Messaging.UdpPort must be 0 (OS-assigned) or 1-65535.");
+
+            if (options.Messaging.PreferUdp)
+            {
+                if (options.Messaging.LinkHandshakeTimeout <= TimeSpan.Zero)
+                    failures.Add("Messaging.LinkHandshakeTimeout must be positive.");
+
+                if (options.Messaging.MaxUdpPayloadBytes is < 64 or > 512 * 1024)
+                    failures.Add("Messaging.MaxUdpPayloadBytes must be 64 bytes to 512 KiB.");
+            }
         }
 
         if (options.NodeName is { } nodeName && (nodeName.Length == 0 || nodeName.Length > 256))

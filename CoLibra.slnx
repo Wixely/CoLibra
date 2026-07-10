@@ -6,6 +6,7 @@
     <Project Path="samples/CoLibra.Sample.Worker/CoLibra.Sample.Worker.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/CoLibra.Messaging.LiteNetLib/CoLibra.Messaging.LiteNetLib.csproj" />
     <Project Path="src/CoLibra/CoLibra.csproj" />
   </Folder>
   <Folder Name="/tests/">

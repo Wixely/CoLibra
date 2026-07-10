@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>CoLibra.Messaging.LiteNetLib</PackageId>
+    <!-- Local/dev default; release builds override this from the git tag (see release.yml). -->
+    <Version>0.3.0</Version>
+    <Description>Resilient-UDP data plane for CoLibra node-to-node messaging, built on LiteNetLib (MIT). Adds real Unreliable/Sequenced/Reliable delivery modes for game-server style traffic; the encrypted TCP mesh remains the control plane and automatic fallback.</Description>
+    <PackageTags>colibra;udp;litenetlib;game;networking;messaging</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LiteNetLib" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoLibra\CoLibra.csproj" />
+  </ItemGroup>
+
+</Project>

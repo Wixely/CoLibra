@@ -11,6 +11,7 @@ CoLibra lets instances of the same service find each other on the network and ne
 - ✅ **Completion tracking (opt-in)** — `MarkCompletedAsync` replicates "this key is finished" to every node, so a dead node's finished work is never recomputed.
 - 📬 **Routed delivery (opt-in)** — for load-balancer/partitioned-queue topologies where only one node receives a message: any node can hand data to the cluster and it arrives at the key's owner, force-assigned on first contact.
 - 💬 **Node-to-node messaging (opt-in)** — send payloads directly to a node by id or by an app-defined name (machine id, username…); enough to build presence, control signals, or a whole chat app.
+- 🎮 **Resilient-UDP data plane (opt-in package)** — game-server messaging via LiteNetLib: per-message `Reliable`/`Sequenced`/`Unreliable` delivery, AES-GCM encrypted, 2-byte coordinator-assigned wire ids, automatic TCP fallback.
 - 🗳️ **1 to N nodes** — a single node coordinates itself; at 3+ nodes majority-quorum rules apply, with configurable split-brain behavior.
 - 🔐 **Secure by default** — discovery packets are HMAC-signed with your cluster secret and mesh traffic is TLS-encrypted with a self-signed certificate generated on first startup. Zero certificate setup.
 
@@ -200,6 +201,34 @@ await cluster.Messenger.SendByNameAsync("bob", "chat", new ChatLine("hi bob", Da
 
 Names are advertised through membership (no directory service), need not be unique — `SendByNameAsync` returns one acknowledged result per match — and raw-byte overloads skip serialization just like routing. Sends are acknowledged (`Delivered` / `NoHandler` / `UnknownTarget` / `Timeout`) with at-least-once semantics, and payloads travel over the same encrypted paths as routed delivery: pooled direct member↔member channels with coordinator relay as fallback. Broadcast is deliberately just a loop over `Members` — see the [Chat sample](samples/CoLibra.Sample.Chat/) for a working terminal chat (`dotnet run -- --Name alice`).
 
+## UDP messaging for game servers (opt-in)
+
+The Messenger's default transport is the encrypted TCP mesh — right for control traffic, wrong for 20 Hz position updates where a retransmitted stale packet is worse than no packet. The **`CoLibra.Messaging.LiteNetLib`** package adds a resilient-UDP data plane built on [LiteNetLib](https://github.com/RevenantX/LiteNetLib) (MIT, pure C#):
+
+```csharp
+builder.Services.AddCoLibra(options =>
+{
+    options.Messaging.Enabled = true;
+    options.Messaging.PreferUdp = true;    // use UDP links when both peers have the engine
+});
+builder.Services.AddCoLibraUdpMessaging(); // from CoLibra.Messaging.LiteNetLib
+
+// Per-message delivery modes (same API on TCP, where hints collapse to reliable-ordered):
+await messenger.SendAsync(peer, "fire",      shot,     MessageDelivery.Reliable);    // retransmitted, any order
+await messenger.SendAsync(peer, "positions", position, MessageDelivery.Sequenced);   // latest-wins, late packets dropped
+await messenger.SendAsync(peer, "chat",      line);                                  // ReliableOrdered (default), acked
+```
+
+`Reliable*` modes keep the acknowledged `SendResult`; `Sequenced`/`Unreliable` return `SendStatus.Sent` (fire-and-forget). How it stays safe and cheap:
+
+- **Keys ride the TLS mesh.** A per-link AES-256-GCM key pair (one per direction) is derived from the cluster secret + nonces exchanged over the existing TCP channel; every datagram is authenticated-encrypted with replay suppression. No certificates on the UDP path, nothing readable or spoofable on the wire.
+- **Compact headers.** The coordinator assigns each member a 2-byte wire id (visible as `ClusterMember.WireId`), channel names compress to 1 byte per link, and payloads travel raw: **15 bytes of header + 16-byte auth tag** instead of GUIDs and JSON. Wire ids are term-scoped, so coordinator failovers can't confuse identities — links just re-handshake.
+- **Automatic fallback.** No engine registered, peer without UDP, handshake failure, or payload over `MaxUdpPayloadBytes` (8 KiB default) → that message silently takes the TCP path. Mixed clusters (game server on UDP, tooling on TCP) just work.
+
+Try it: `dotnet run -- --Name alice --Udp true` in two [Chat sample](samples/CoLibra.Sample.Chat/) terminals — chat lines go ReliableOrdered while a `positions` channel streams 20 Hz Sequenced updates over the same link.
+
+License note: LiteNetLib is MIT (© Ruslan Pyrch); its notice ships in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt), inside the `CoLibra.Messaging.LiteNetLib` package, and in the release zip — where the DLL is a single file with LiteNetLib merged in (internalized), so one file drop-in still satisfies the license.
+
 ## Completion tracking (opt-in)
 
 By default a finished piece of work is only remembered while its owner lives — if a node dies, even its *completed* keys become grantable again and get redone (at-least-once semantics). Enable `options.CompletionTracking` to remember completions cluster-wide:
@@ -291,6 +320,7 @@ Held leases keep renewing under every policy — a node never silently stops wor
 | `Routing.UseDirectChannels` / `.IdleChannelTimeout` / `.OwnerCacheTtl` / `.AssignmentAckTimeout` | `true` / 60 s / 30 s / 2 s | Direct member↔member payload channels vs coordinator relay. |
 | `NodeName` | null | App-defined name shown on `ClusterMember.Name`, addressable via `SendByNameAsync`. |
 | `Messaging.Enabled` / `.MaxPayloadBytes` / `.DeliveryTimeout` / `.UseDirectChannels` | `false` / 1 MiB / 5 s / `true` | Node-to-node messaging (see above). |
+| `Messaging.PreferUdp` / `.UdpPort` / `.LinkHandshakeTimeout` / `.MaxUdpPayloadBytes` | `false` / 0 (auto) / 2 s / 8 KiB | Resilient-UDP data plane (requires the CoLibra.Messaging.LiteNetLib package). |
 
 ## Networking notes
 

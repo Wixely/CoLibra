@@ -19,28 +19,33 @@ public interface ICoLibraMessenger
     /// <summary>Typed <see cref="RegisterHandler"/>: payloads are deserialized with <see cref="MessagingOptions.PayloadSerializer"/>.</summary>
     IAsyncDisposable RegisterHandler<T>(string channel, Func<ReceivedMessage<T>, CancellationToken, ValueTask> handler);
 
-    /// <summary>Sends raw bytes to one node. Sending to this node's own id delivers in-process.</summary>
+    /// <summary>
+    /// Sends raw bytes to one node. Sending to this node's own id delivers in-process.
+    /// Reliable <paramref name="delivery"/> modes complete with an acknowledged result;
+    /// <see cref="MessageDelivery.Sequenced"/>/<see cref="MessageDelivery.Unreliable"/> return
+    /// <see cref="SendStatus.Sent"/> without waiting.
+    /// </summary>
     ValueTask<SendResult> SendAsync(NodeId target, string channel, ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken = default);
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
 
     /// <summary>Raw-bytes overload (keeps <c>byte[]</c> arguments off the generic serializer path).</summary>
     ValueTask<SendResult> SendAsync(NodeId target, string channel, byte[] payload,
-        CancellationToken cancellationToken = default);
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
 
     /// <summary>Typed send: serializes <paramref name="value"/> with <see cref="MessagingOptions.PayloadSerializer"/>.</summary>
     ValueTask<SendResult> SendAsync<T>(NodeId target, string channel, T value,
-        CancellationToken cancellationToken = default);
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends to every member whose <see cref="ClusterMember.Name"/> equals <paramref name="name"/>
     /// (ordinal). Returns one result per matching node; empty when no member bears the name.
     /// </summary>
     ValueTask<IReadOnlyList<SendResult>> SendByNameAsync(string name, string channel, ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken = default);
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
 
     /// <summary>Typed <see cref="SendByNameAsync"/>.</summary>
     ValueTask<IReadOnlyList<SendResult>> SendByNameAsync<T>(string name, string channel, T value,
-        CancellationToken cancellationToken = default);
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
 }
 
 /// <summary>A message delivered to this node's channel handler.</summary>
@@ -52,7 +57,7 @@ public sealed class ReceivedMessage
     /// <summary>The payload, exactly as sent.</summary>
     public required ReadOnlyMemory<byte> Payload { get; init; }
 
-    /// <summary>The sending node's id (reply address for <see cref="ICoLibraMessenger.SendAsync(NodeId, string, ReadOnlyMemory{byte}, CancellationToken)"/>).</summary>
+    /// <summary>The sending node's id (reply address for <see cref="ICoLibraMessenger.SendAsync(NodeId, string, ReadOnlyMemory{byte}, MessageDelivery, CancellationToken)"/>).</summary>
     public required NodeId Origin { get; init; }
 
     /// <summary>The sending node's <see cref="CoLibraOptions.NodeName"/>, when it set one.</summary>
@@ -92,6 +97,12 @@ public enum SendStatus
 
     /// <summary>The payload exceeds <see cref="MessagingOptions.MaxPayloadBytes"/>.</summary>
     PayloadTooLarge = 4,
+
+    /// <summary>
+    /// Handed to a <see cref="MessageDelivery.Sequenced"/>/<see cref="MessageDelivery.Unreliable"/>
+    /// channel; there is no delivery confirmation by design.
+    /// </summary>
+    Sent = 5,
 }
 
 /// <summary>Result of a send: the outcome and the node it targeted.</summary>

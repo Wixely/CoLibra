@@ -13,6 +13,7 @@ internal sealed class ClusterKeys
 
     public byte[] DiscoveryKey { get; }
     public byte[] HandshakeKey { get; }
+    public byte[] UdpLinkKey { get; }
 
     public ClusterKeys(string serviceId, string sharedSecret)
     {
@@ -20,5 +21,6 @@ internal sealed class ClusterKeys
         var salt = SHA256.HashData(Encoding.UTF8.GetBytes("colibra:" + serviceId));
         DiscoveryKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, KeyLength, salt, "colibra-discovery"u8.ToArray());
         HandshakeKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, KeyLength, salt, "colibra-handshake"u8.ToArray());
+        UdpLinkKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, KeyLength, salt, "colibra-udp-link"u8.ToArray());
     }
 }

@@ -23,7 +23,10 @@ internal sealed class TestCluster(ITestOutputHelper? output = null) : IAsyncDisp
 
     public static readonly TimeSpan Eventually = TimeSpan.FromSeconds(15 * Scale);
 
-    public async Task<CoLibraNode> StartNodeAsync(Action<CoLibraOptions>? mutate = null, bool waitForCluster = true)
+    public Task<CoLibraNode> StartNodeAsync(Action<CoLibraOptions>? mutate = null, bool waitForCluster = true) =>
+        StartNodeAsync(mutate, waitForCluster, udpEngine: null);
+
+    public async Task<CoLibraNode> StartNodeAsync(Action<CoLibraOptions>? mutate, bool waitForCluster, IUdpMessagingEngine? udpEngine)
     {
         var options = new CoLibraOptions
         {
@@ -46,7 +49,7 @@ internal sealed class TestCluster(ITestOutputHelper? output = null) : IAsyncDisp
         var logger = output is null
             ? (ILogger)NullLogger.Instance
             : new TestOutputLogger(output, $"node@{transport.MeshEndpoint.Address}");
-        var node = new CoLibraNode(options, logger, TimeProvider.System, transport);
+        var node = new CoLibraNode(options, logger, TimeProvider.System, transport, udpEngine);
         _endpoints[node] = transport.MeshEndpoint;
         _nodes.Add(node);
         await node.StartAsync(CancellationToken.None);

@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoLibra\CoLibra.csproj" />
+    <ProjectReference Include="..\..\src\CoLibra.Messaging.LiteNetLib\CoLibra.Messaging.LiteNetLib.csproj" />
   </ItemGroup>
 
 </Project>

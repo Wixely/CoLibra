@@ -58,8 +58,10 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     private readonly HashSet<Guid> _incompatibleCoordinators = [];
     private int _joinRedirects;
 
-    public CoLibraNode(CoLibraOptions options, ILogger logger, TimeProvider timeProvider, ITransport? transport = null)
+    public CoLibraNode(CoLibraOptions options, ILogger logger, TimeProvider timeProvider, ITransport? transport = null,
+        IUdpMessagingEngine? udpEngine = null)
     {
+        _udpEngine = udpEngine;
         _options = options;
         _logger = logger;
         _time = timeProvider;
@@ -104,6 +106,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await _transport.StartAsync(cancellationToken).ConfigureAwait(false);
+        await StartUdpEngineAsync(cancellationToken).ConfigureAwait(false);
         _pumps.Add(Task.Run(RunActorAsync, CancellationToken.None));
         _pumps.Add(Task.Run(() => RunTicksAsync(_stopping.Token), CancellationToken.None));
         _pumps.Add(Task.Run(() => PumpDatagramsAsync(_stopping.Token), CancellationToken.None));
@@ -131,6 +134,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
             foreach (var pendingAck in _pendingMessageAcks.Values.ToList())
                 pendingAck.TrySetResult(DirectAckStatus.Unreachable);
             _pendingMessageAcks.Clear();
+            CloseAllUdpLinks("node stopping");
             foreach (var pooled in _directChannels.Values)
                 _ = pooled.Channel.DisposeAsync();
             _directChannels.Clear();
@@ -149,6 +153,8 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
         _stopping.Cancel();
         _actions.Writer.TryComplete();
+        if (_udpEngine is not null)
+            await _udpEngine.DisposeAsync().ConfigureAwait(false);
         await _transport.DisposeAsync().ConfigureAwait(false);
         _clusterReady.TrySetCanceled();
         try

@@ -30,4 +30,24 @@ public sealed class MessagingOptions
     /// (<see cref="JsonPayloadSerializer"/>). Must match across all nodes.
     /// </summary>
     public IRoutedPayloadSerializer PayloadSerializer { get; set; } = new JsonPayloadSerializer();
+
+    /// <summary>
+    /// Prefer the resilient-UDP data plane for node-to-node messages when a UDP engine is
+    /// registered (e.g. the CoLibra.Messaging.LiteNetLib package) and the peer advertises a UDP
+    /// port. Falls back to the TCP path automatically per peer/message when UDP is unavailable.
+    /// Default false. The TCP control plane is unaffected either way.
+    /// </summary>
+    public bool PreferUdp { get; set; }
+
+    /// <summary>UDP data-plane listen port. 0 (default) binds an OS-assigned port, advertised via membership.</summary>
+    public int UdpPort { get; set; }
+
+    /// <summary>Budget for establishing a UDP link (key exchange over TCP + connect). Default 2 s.</summary>
+    public TimeSpan LinkHandshakeTimeout { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Messages larger than this silently use the TCP path even when UDP is preferred
+    /// (game-state payloads should be small; large blobs belong on TCP). Default 8 KiB.
+    /// </summary>
+    public int MaxUdpPayloadBytes { get; set; } = 8 * 1024;
 }

@@ -35,18 +35,23 @@ jobs:
           name: release-test-results
           path: '**/TestResults/*.trx'
 
-      - name: Pack NuGet package
-        run: >
-          dotnet pack src/CoLibra/CoLibra.csproj --configuration Release
-          -p:Version=${{ env.VERSION }} -p:ContinuousIntegrationBuild=true
-          --output artifacts
+      - name: Pack NuGet packages
+        run: |
+          dotnet pack src/CoLibra/CoLibra.csproj --configuration Release -p:Version=${{ env.VERSION }} -p:ContinuousIntegrationBuild=true --output artifacts
+          dotnet pack src/CoLibra.Messaging.LiteNetLib/CoLibra.Messaging.LiteNetLib.csproj --configuration Release -p:Version=${{ env.VERSION }} -p:ContinuousIntegrationBuild=true --output artifacts
 
       - name: Publish DLL bundle
         run: |
           dotnet publish src/CoLibra/CoLibra.csproj --configuration Release -p:Version=${{ env.VERSION }} --output publish
-          cp LICENSE README.md publish/
+          dotnet publish src/CoLibra.Messaging.LiteNetLib/CoLibra.Messaging.LiteNetLib.csproj --configuration Release -p:Version=${{ env.VERSION }} --output publish-udp
+          # Single-file UDP extension: LiteNetLib merged in (internalized). MIT obliges us to
+          # ship its copyright + permission notice alongside — THIRD-PARTY-NOTICES.txt.
+          dotnet tool install --global dotnet-ilrepack
+          ilrepack /internalize /lib:publish-udp /out:publish/CoLibra.Messaging.LiteNetLib.dll publish-udp/CoLibra.Messaging.LiteNetLib.dll publish-udp/LiteNetLib.dll
+          cp publish-udp/CoLibra.Messaging.LiteNetLib.xml publish/ || true
+          cp LICENSE README.md THIRD-PARTY-NOTICES.txt publish/
           mkdir -p artifacts
-          (cd publish && zip "../artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip" CoLibra.dll CoLibra.pdb CoLibra.xml LICENSE README.md)
+          (cd publish && zip "../artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip" CoLibra.dll CoLibra.pdb CoLibra.xml CoLibra.Messaging.LiteNetLib.dll CoLibra.Messaging.LiteNetLib.xml LICENSE README.md THIRD-PARTY-NOTICES.txt)
 
       - name: Create GitHub Release
         env:
@@ -54,6 +59,7 @@ jobs:
         run: >
           gh release create "${{ github.ref_name }}"
           artifacts/CoLibra.${{ env.VERSION }}.nupkg
+          artifacts/CoLibra.Messaging.LiteNetLib.${{ env.VERSION }}.nupkg
           "artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip"
           --title "CoLibra ${{ env.VERSION }}"
           --generate-notes
