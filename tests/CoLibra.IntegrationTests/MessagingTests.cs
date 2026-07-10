@@ -75,7 +75,8 @@ public class MessagingTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.Equal(2, results.Count);
         Assert.All(results, r => Assert.Equal(SendStatus.Delivered, r.Status));
         await TestCluster.WaitUntilAsync(() => hits.Count == 2);
-        Assert.Equal([b.LocalNodeId, c.LocalNodeId], hits.Order().ToArray());
+        Assert.Contains(b.LocalNodeId, hits); // set comparison: Guid ordering is unrelated to start order
+        Assert.Contains(c.LocalNodeId, hits);
     }
 
     [Fact]

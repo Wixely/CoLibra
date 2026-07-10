@@ -1,0 +1,5 @@
+{
+  "$schema": "https://xunit.net/schema/current/xunit.runner.schema.json",
+  "parallelizeTestCollections": false,
+  "_comment": "Each test class runs a real-time multi-node cluster with sub-second failure-detection timings; running many clusters concurrently starves the thread pool and produces spurious member deaths / stalled elections, especially in Release builds. Sequential collections trade ~1 minute of wall time for determinism."
+}
