@@ -53,16 +53,20 @@ jobs:
           mkdir -p artifacts
           (cd publish && zip "../artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip" CoLibra.dll CoLibra.pdb CoLibra.xml CoLibra.Messaging.LiteNetLib.dll CoLibra.Messaging.LiteNetLib.xml LICENSE README.md THIRD-PARTY-NOTICES.txt)
 
-      - name: Publish samples bundle
+      - name: Publish samples bundle (win-x64 single-file executables)
         run: |
-          # All five demos into ONE folder: shared CoLibra/runtime deps dedupe, and each
-          # sample reads its own named config (chat.json, gameserver.json, primegrid.json).
+          # One self-sufficient .exe per demo (all managed deps bundled inside; needs only the
+          # .NET 10 runtime), plus each sample's named editable config beside it.
           for sample in Worker PrimeGrid Router Chat GameServer; do
             dotnet publish "samples/CoLibra.Sample.$sample/CoLibra.Sample.$sample.csproj" \
-              --configuration Release -p:Version=${{ env.VERSION }} --output samples-publish
+              --configuration Release -p:Version=${{ env.VERSION }} \
+              --runtime win-x64 --self-contained false \
+              -p:PublishSingleFile=true -p:DebugType=none \
+              --output samples-publish
           done
+          rm -f samples-publish/*.xml
           cp samples/SAMPLES-README.txt LICENSE THIRD-PARTY-NOTICES.txt samples-publish/
-          (cd samples-publish && zip -r "../artifacts/CoLibra-Samples-${{ env.VERSION }}.zip" .)
+          (cd samples-publish && zip -r "../artifacts/CoLibra-Samples-${{ env.VERSION }}-win-x64.zip" .)
 
       - name: Create GitHub Release
         env:
@@ -72,7 +76,7 @@ jobs:
           artifacts/CoLibra.${{ env.VERSION }}.nupkg
           artifacts/CoLibra.Messaging.LiteNetLib.${{ env.VERSION }}.nupkg
           "artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip"
-          "artifacts/CoLibra-Samples-${{ env.VERSION }}.zip"
+          "artifacts/CoLibra-Samples-${{ env.VERSION }}-win-x64.zip"
           --title "CoLibra ${{ env.VERSION }}"
           --generate-notes
 

@@ -1,13 +1,13 @@
 CoLibra sample applications
 ===========================
 
-Five runnable demos of CoLibra's decentralized discovery and work negotiation.
-Everything in this folder shares one .NET 10 runtime dependency set; on Windows
-run the .exe files, elsewhere run `dotnet <Sample>.dll`. Instances discover each
-other automatically on the same LAN (UDP multicast) - just start several copies,
-on one machine or many.
+Five runnable demos of CoLibra's decentralized discovery and work negotiation,
+each a single self-sufficient Windows executable (all libraries bundled inside).
+Instances discover each other automatically on the same LAN (UDP multicast) -
+just start several copies, on one machine or many.
 
 Requires the .NET 10 runtime: https://dotnet.microsoft.com/download
+(Other platforms: build from source - `dotnet publish -r linux-x64` works too.)
 
 Configuration: chat.json / gameserver.json / primegrid.json hold each demo's
 settings (deliberately distinct names so all demos coexist in this one folder).

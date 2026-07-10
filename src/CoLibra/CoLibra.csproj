@@ -1,9 +1,9 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <PackageId>CoLibra</PackageId>
     <!-- Local/dev default; release builds override this from the git tag (see release.yml). -->
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Description>Decentralized service discovery and distributed work negotiation for .NET. Services of the same kind auto-detect each other on the network (no central server) and negotiate exclusive, heartbeat-backed work leases so parallel workers never duplicate work.</Description>
     <PackageTags>distributed;discovery;multicast;lease;lock;cluster;coordination;p2p</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
