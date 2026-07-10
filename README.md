@@ -281,6 +281,8 @@ options.CoordinatorMode = CoordinatorMode.Never;
 
 A `Forced` node never joins a non-forced coordinator: it claims leadership with a superseding term at startup and takes over an existing cluster cleanly (the incumbent steps down and rejoins as a member; held leases are re-asserted and survive). It never yields afterwards — a rival coordinator gets out-termed, not obeyed — and its claims bypass the quorum gate, so a lone game server always serves. If several `Forced` nodes meet, the first one up wins and later ones join it (simultaneous claims settle by the usual term/node-id rules). `Never` nodes join and work like any member, but when no coordinator is reachable they wait instead of claiming — deploy at least one `Eligible` or `Forced` node per cluster. While a forced coordinator is down, remaining `Eligible` nodes elect a stand-in among themselves; the forced node reclaims leadership on return.
 
+The [GameServer sample](samples/CoLibra.Sample.GameServer/) shows the whole asymmetric story running: a `Forced` non-accepting authority, `Never` players sharing zone leases, score reports over messaging, and automatic `ForceRebalanceAsync` on membership changes (`dotnet run -- --Server true` plus any number of `dotnet run -- --Name playerN`).
+
 The other half of asymmetry is **work acceptance**. A node that coordinates, observes, or serves some other purpose can declare that it never takes work leases:
 
 ```csharp
