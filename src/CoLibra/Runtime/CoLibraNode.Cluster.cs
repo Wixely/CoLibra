@@ -443,7 +443,8 @@ internal sealed partial class CoLibraNode
                 _transport.MeshEndpoint.Port, heldDtos,
                 SupportsCompletionSync: _completions is not null,
                 RoutedTypes: _routedTypesSnapshot,
-                NodeName: _options.NodeName), ct).ConfigureAwait(false);
+                NodeName: _options.NodeName,
+                AcceptsWork: _acceptWork), ct).ConfigureAwait(false);
 
             while (true)
             {
@@ -601,6 +602,7 @@ internal sealed partial class CoLibraNode
                 Weight = dto.Weight,
                 IsCoordinator = dto.IsCoordinator,
                 Name = dto.Name,
+                AcceptsWork = dto.AcceptsWork,
             });
         }
 

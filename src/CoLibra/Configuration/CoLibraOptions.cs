@@ -97,6 +97,17 @@ public sealed class CoLibraOptions
     /// </summary>
     public CoordinatorMode CoordinatorMode { get; set; } = CoordinatorMode.Eligible;
 
+    /// <summary>
+    /// Whether this node accepts work leases (default true). When false the node never
+    /// acquires or gets assigned work — it is excluded from load-balance math and from routed
+    /// forced assignment, and its own lease requests are denied locally — while everything
+    /// else (membership, messaging, routing payloads out, coordinatorship) works normally.
+    /// Typical for authority nodes: a game server is <see cref="CoordinatorMode.Forced"/> and
+    /// AcceptWork = false. Toggle at runtime with <see cref="ICoLibraCluster.SetAcceptingWorkAsync"/>;
+    /// turning it off never revokes leases already held.
+    /// </summary>
+    public bool AcceptWork { get; set; } = true;
+
     /// <summary>Caches negative CanProcess answers locally (push-invalidated by the coordinator). Default true.</summary>
     public bool EnableDecisionCache { get; set; } = true;
 

@@ -462,11 +462,12 @@ internal sealed partial class CoLibraNode : ICoLibraRouter
 
     private List<NodeId> AdvertisersOf(CoordinatorRole coordinator, string type)
     {
+        // A handler advertises capability; AcceptsWork gates willingness — both required.
         var advertisers = coordinator.Sessions.Values
-            .Where(s => s.RoutedTypes.Contains(type, StringComparer.Ordinal))
+            .Where(s => s.Dto.AcceptsWork && s.RoutedTypes.Contains(type, StringComparer.Ordinal))
             .Select(s => s.Id)
             .ToList();
-        if (_options.Routing.Enabled && _routedHandlers.ContainsKey(type))
+        if (_options.Routing.Enabled && _acceptWork && _routedHandlers.ContainsKey(type))
             advertisers.Add(LocalNodeId);
         return advertisers;
     }

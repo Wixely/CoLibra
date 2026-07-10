@@ -53,6 +53,7 @@ internal sealed class CoordinatorLeaseTable
     private readonly Dictionary<LeaseKey, List<PendingOther>> _pendingOther = [];
     private readonly Dictionary<string, Dictionary<NodeId, int>> _countsByType = new(StringComparer.Ordinal);
     private readonly Dictionary<NodeId, double> _nodeWeights = [];
+    private readonly HashSet<NodeId> _notAccepting = [];
     private long _sequence;
 
     public CoordinatorLeaseTable(long term, CoLibraOptions options, TimeProvider timeProvider,
@@ -79,7 +80,11 @@ internal sealed class CoordinatorLeaseTable
 
     public int LeaseCount => _leases.Count;
 
-    public void NodeUp(NodeId node, double weight) => _nodeWeights[node] = weight;
+    public void NodeUp(NodeId node, double weight, bool acceptsWork = true)
+    {
+        _nodeWeights[node] = weight;
+        SetAcceptsWork(node, acceptsWork);
+    }
 
     public void SetWeight(NodeId node, double weight)
     {
@@ -87,10 +92,20 @@ internal sealed class CoordinatorLeaseTable
             _nodeWeights[node] = weight;
     }
 
+    /// <summary>Marks a node as (not) accepting work: excluded from grants and balance math.</summary>
+    public void SetAcceptsWork(NodeId node, bool acceptsWork)
+    {
+        if (acceptsWork)
+            _notAccepting.Remove(node);
+        else
+            _notAccepting.Add(node);
+    }
+
     /// <summary>Removes a dead node; returns its freed keys with the interest sets to notify.</summary>
     public List<(LeaseKey Key, List<NodeId> Interested)> NodeDown(NodeId node)
     {
         _nodeWeights.Remove(node);
+        _notAccepting.Remove(node);
         foreach (var counts in _countsByType.Values)
             counts.Remove(node);
 
@@ -119,6 +134,14 @@ internal sealed class CoordinatorLeaseTable
             return new AcquireOutcome
             {
                 Immediate = new GrantDecision(requester, requestId, key, false, default, LeaseDenialReason.Completed, null),
+            };
+        }
+
+        if (_notAccepting.Contains(requester))
+        {
+            return new AcquireOutcome
+            {
+                Immediate = new GrantDecision(requester, requestId, key, false, default, LeaseDenialReason.NotAcceptingWork, null),
             };
         }
 
@@ -375,7 +398,13 @@ internal sealed class CoordinatorLeaseTable
             return count / Math.Max(weight, 0.001);
         }
 
-        var minLoad = _nodeWeights.Keys.Min(Load);
+        // Only nodes accepting work are steering candidates: an authority node that never
+        // takes leases must not pin the minimum at zero and starve every real worker.
+        var candidates = _nodeWeights.Keys.Where(n => !_notAccepting.Contains(n)).ToList();
+        if (candidates.Count <= 1)
+            return false;
+
+        var minLoad = candidates.Min(Load);
         return Load(requester) > minLoad + _options.LoadBalanceTolerance;
     }
 

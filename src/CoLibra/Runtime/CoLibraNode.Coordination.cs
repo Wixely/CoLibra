@@ -270,14 +270,14 @@ internal sealed partial class CoLibraNode
             Incarnation = peer.PeerIncarnation,
             Connection = peer.Channel,
             Dto = new MemberDto(peer.PeerId.Value, peer.PeerIncarnation, remoteAddress.ToString(),
-                request.MeshPort, request.ServiceVersion, request.Weight, false, request.NodeName),
+                request.MeshPort, request.ServiceVersion, request.Weight, false, request.NodeName, request.AcceptsWork),
             LastSeenTs = now,
             SupportsCompletionSync = request.SupportsCompletionSync,
             RoutedTypes = request.RoutedTypes ?? [],
         };
         coordinator.Sessions[peer.PeerId] = session;
         coordinator.RecentlyDeparted.Remove(peer.PeerId);
-        coordinator.Table.NodeUp(peer.PeerId, request.Weight);
+        coordinator.Table.NodeUp(peer.PeerId, request.Weight, request.AcceptsWork);
 
         var rejected = coordinator.Table.AssertHeld(
             peer.PeerId,
@@ -304,10 +304,14 @@ internal sealed partial class CoLibraNode
 
         var now = Now();
         session.LastSeenTs = now;
-        session.Dto = session.Dto with { Weight = heartbeat.Weight };
+        var acceptanceChanged = session.Dto.AcceptsWork != heartbeat.AcceptsWork;
+        session.Dto = session.Dto with { Weight = heartbeat.Weight, AcceptsWork = heartbeat.AcceptsWork };
         if (heartbeat.RoutedTypes is not null)
             session.RoutedTypes = heartbeat.RoutedTypes;
         coordinator.Table.SetWeight(peer.PeerId, heartbeat.Weight);
+        coordinator.Table.SetAcceptsWork(peer.PeerId, heartbeat.AcceptsWork);
+        if (acceptanceChanged)
+            UpdateCoordinatorMembership(coordinator); // propagate the flip to every member's view
 
         var lost = coordinator.Table.Renew(
             peer.PeerId,
@@ -407,7 +411,8 @@ internal sealed partial class CoLibraNode
         var dtos = new List<MemberDto>(coordinator.Sessions.Count + 1)
         {
             new(LocalNodeId.Value, _incarnation, _transport.MeshEndpoint.Address.ToString(),
-                _transport.MeshEndpoint.Port, _serviceVersion.ToString(), _options.Weight, true, _options.NodeName),
+                _transport.MeshEndpoint.Port, _serviceVersion.ToString(), _options.Weight, true, _options.NodeName,
+                _acceptWork),
         };
         dtos.AddRange(coordinator.Sessions.Values.Select(s => s.Dto));
         return dtos;
@@ -432,6 +437,7 @@ internal sealed partial class CoLibraNode
                 Weight = dto.Weight,
                 IsCoordinator = dto.IsCoordinator,
                 Name = dto.Name,
+                AcceptsWork = dto.AcceptsWork,
             });
         }
 
@@ -642,7 +648,7 @@ internal sealed partial class CoLibraNode
             LastSelfRenewTs = now,
         };
 
-        table.NodeUp(LocalNodeId, _options.Weight);
+        table.NodeUp(LocalNodeId, _options.Weight, _acceptWork);
         table.AssertHeld(LocalNodeId, [.. _held.Select(kv => (kv.Key, kv.Value.Token))], now);
 
         // Keep pre-election members in the quorum denominator until they rejoin or decay.
@@ -748,7 +754,7 @@ internal sealed partial class CoLibraNode
         {
             member.LastHeartbeatSentTs = now;
             _ = SendSafeAsync(member.Connection, new HeartbeatMessage(
-                BuildHeldDtos(), BuildTypeCounts(), _options.Weight, _routedTypesSnapshot));
+                BuildHeldDtos(), BuildTypeCounts(), _options.Weight, _routedTypesSnapshot, _acceptWork));
         }
 
         if (Since(member.LastCoordinatorSignalTs) > _options.MemberTimeout)

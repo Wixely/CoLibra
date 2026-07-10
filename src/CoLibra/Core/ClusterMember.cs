@@ -29,4 +29,7 @@ public sealed record ClusterMember
 
     /// <summary>True when this member is the current coordinator.</summary>
     public bool IsCoordinator { get; init; }
+
+    /// <summary>Whether this member accepts work leases (see <see cref="CoLibraOptions.AcceptWork"/>).</summary>
+    public bool AcceptsWork { get; init; } = true;
 }

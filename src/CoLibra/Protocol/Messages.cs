@@ -81,7 +81,8 @@ internal sealed record MemberDto(
     string ServiceVersion,
     double Weight,
     bool IsCoordinator,
-    string? Name = null);
+    string? Name = null,
+    bool AcceptsWork = true);
 
 // ---------------------------------------------------------------------------
 // Discovery (UDP)
@@ -153,7 +154,8 @@ internal sealed record JoinRequestMessage(
     IReadOnlyList<HeldLeaseDto> HeldLeases,
     bool SupportsCompletionSync = false,
     IReadOnlyList<string>? RoutedTypes = null,
-    string? NodeName = null) : Message
+    string? NodeName = null,
+    bool AcceptsWork = true) : Message
 {
     public override MessageType Type => MessageType.JoinRequest;
 }
@@ -188,7 +190,8 @@ internal sealed record HeartbeatMessage(
     IReadOnlyList<HeldLeaseDto> HeldLeases,
     Dictionary<string, int> PerTypeCounts,
     double Weight,
-    IReadOnlyList<string>? RoutedTypes = null) : Message
+    IReadOnlyList<string>? RoutedTypes = null,
+    bool AcceptsWork = true) : Message
 {
     public override MessageType Type => MessageType.Heartbeat;
 }

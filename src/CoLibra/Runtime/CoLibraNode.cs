@@ -42,6 +42,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         ImmutableDictionary<LeaseKey, FencingToken>.Empty;
     private long _lastAckTimestamp;
     private volatile bool _isCoordinatorRole;
+    private volatile bool _acceptWork;
     private readonly Dictionary<Guid, PendingAcquire> _pendingAcquires = [];
 
     // ---- cluster state (actor-owned; volatile snapshots for public reads) ----
@@ -72,6 +73,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         _completions = options.CompletionTracking.Enabled
             ? new CompletionRegistry(options.CompletionTracking, timeProvider)
             : null;
+        _acceptWork = options.AcceptWork;
         _transport = transport ?? new SocketTransport(
             options,
             CertificateProvider.GetOrCreate(options.ResolveCertificatePath(), options.ServiceId, logger),
@@ -173,7 +175,9 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         ThrowIfSplitBrainPolicyThrows();
 
         if (IsHeldAndFresh(key))
-            return ValueTask.FromResult(true);
+            return ValueTask.FromResult(true); // held work continues even when not accepting new
+        if (!_acceptWork)
+            return ValueTask.FromResult(false);
         if (_completions?.Contains(key) == true)
             return ValueTask.FromResult(false);
         if (_negativeCache.IsDenied(key))
@@ -225,6 +229,26 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
     public bool IsCompleted(string type, string id) =>
         _completions?.Contains(new LeaseKey(type, id)) ?? false;
+
+    public bool IsAcceptingWork => _acceptWork;
+
+    public ValueTask SetAcceptingWorkAsync(bool accept, CancellationToken cancellationToken = default) =>
+        new(PostWithResult<bool>(tcs =>
+        {
+            _acceptWork = accept;
+            if (_coordinator is { } coordinator)
+            {
+                coordinator.Table.SetAcceptsWork(LocalNodeId, accept);
+                UpdateCoordinatorMembership(coordinator); // members see the flip immediately
+            }
+            else if (_member is { } member)
+            {
+                member.LastHeartbeatSentTs = 0; // advertise on the next tick instead of a full interval
+            }
+
+            tcs.TrySetResult(true);
+            return ValueTask.CompletedTask;
+        }).WaitAsync(cancellationToken));
 
     public ValueTask MarkCompletedAsync(string type, string id, CancellationToken cancellationToken = default)
     {
@@ -315,6 +339,12 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
             if (_held.ContainsKey(key) && IsHeldAndFresh(key))
             {
                 tcs.TrySetResult(new GrantResult(true, _held[key].Token, LeaseDenialReason.None, null));
+                return ValueTask.CompletedTask;
+            }
+
+            if (!_acceptWork)
+            {
+                tcs.TrySetResult(new GrantResult(false, default, LeaseDenialReason.NotAcceptingWork, null));
                 return ValueTask.CompletedTask;
             }
 

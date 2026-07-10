@@ -148,4 +148,10 @@ public enum LeaseDenialReason
     /// completed keys are never granted again (while the tombstone is retained).
     /// </summary>
     Completed = 6,
+
+    /// <summary>
+    /// This node is not accepting work (<see cref="CoLibraOptions.AcceptWork"/> /
+    /// <see cref="ICoLibraCluster.SetAcceptingWorkAsync"/>).
+    /// </summary>
+    NotAcceptingWork = 7,
 }

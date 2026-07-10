@@ -236,6 +236,15 @@ options.CoordinatorMode = CoordinatorMode.Never;
 
 A `Forced` node never joins a non-forced coordinator: it claims leadership with a superseding term at startup and takes over an existing cluster cleanly (the incumbent steps down and rejoins as a member; held leases are re-asserted and survive). It never yields afterwards — a rival coordinator gets out-termed, not obeyed — and its claims bypass the quorum gate, so a lone game server always serves. If several `Forced` nodes meet, the first one up wins and later ones join it (simultaneous claims settle by the usual term/node-id rules). `Never` nodes join and work like any member, but when no coordinator is reachable they wait instead of claiming — deploy at least one `Eligible` or `Forced` node per cluster. While a forced coordinator is down, remaining `Eligible` nodes elect a stand-in among themselves; the forced node reclaims leadership on return.
 
+The other half of asymmetry is **work acceptance**. A node that coordinates, observes, or serves some other purpose can declare that it never takes work leases:
+
+```csharp
+options.AcceptWork = false;                    // typical pairing: CoordinatorMode.Forced + AcceptWork = false
+await cluster.SetAcceptingWorkAsync(false);    // or flip it at runtime (drain mode); back on with true
+```
+
+A non-accepting node is denied acquisitions (locally, instantly — `LeaseDenialReason.NotAcceptingWork`), excluded from load-balance math (an idle authority no longer pins the `Balanced` minimum at zero and starves real workers — this closes the mixed-cluster caveat), and skipped by routed forced assignment even where it has handlers registered. Everything else — membership, messaging, routing payloads *out*, coordinating — works normally. Acceptance is advertised in the join handshake and on every heartbeat (runtime flips propagate within about a heartbeat and are visible on `ClusterMember.AcceptsWork`), and turning it off never revokes leases already held: they keep renewing until released, completed, or the node stops.
+
 ## Cluster sizes, quorum and split brain
 
 | Nodes | Behavior |
@@ -272,6 +281,7 @@ Held leases keep renewing under every policy — a node never silently stops wor
 | `LeaseTtl` / `LeaseRenewSafetyMargin` | 15 s / 3 s | Owner death → keys reclaimable within ~`LeaseTtl`. |
 | `SplitBrainPolicy` / `QuorumPolicy` | `DenyNewLeases` / `Majority` | |
 | `CoordinatorMode` | `Eligible` | `Forced` (this node IS the coordinator) / `Never` (member only) for asymmetric clusters. |
+| `AcceptWork` | `true` | Whether this node takes work leases; runtime-toggleable via `SetAcceptingWorkAsync`. |
 | `EnableDecisionCache` / `DecisionCacheTtl` / `DecisionCacheMaxEntries` | `true` / 30 s / 10 000 | Caching of negative `CanProcess` answers. |
 | `OtherPreferenceGraceWindow` | 5 s | How long an `Other`-preference request waits for a willing node. |
 | `CertificatePath` | `<app dir>/colibra/<ServiceId>.pfx` | Auto-generated self-signed cert. |

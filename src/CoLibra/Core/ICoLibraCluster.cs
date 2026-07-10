@@ -60,6 +60,16 @@ public interface ICoLibraCluster
     /// </summary>
     ICoLibraMessenger Messenger { get; }
 
+    /// <summary>Whether this node currently accepts work leases (see <see cref="CoLibraOptions.AcceptWork"/>).</summary>
+    bool IsAcceptingWork { get; }
+
+    /// <summary>
+    /// Turns work acceptance on or off at runtime (advertised to the coordinator on the next
+    /// heartbeat). Turning it off denies new acquisitions and excludes this node from balancing
+    /// and forced assignment; leases already held are never revoked and keep renewing.
+    /// </summary>
+    ValueTask SetAcceptingWorkAsync(bool accept, CancellationToken cancellationToken = default);
+
     /// <summary>The keys this node currently owns.</summary>
     IReadOnlyCollection<LeaseKey> HeldLeases { get; }
 
