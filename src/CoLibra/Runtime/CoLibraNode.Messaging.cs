@@ -89,12 +89,29 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
             return new SendResult(localStatus == DirectAckStatus.Delivered ? SendStatus.Delivered : SendStatus.NoHandler, target);
         }
 
-        var member = _members.FirstOrDefault(m => m.NodeId == target);
-        if (member is null)
-            return new SendResult(SendStatus.UnknownTarget, target);
-
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopping.Token);
         timeout.CancelAfter(_options.Messaging.DeliveryTimeout);
+
+        // Target ids normally come from the member list, so "unknown" usually means the
+        // membership update announcing it hasn't reached this node yet — grant a short grace.
+        var member = _members.FirstOrDefault(m => m.NodeId == target);
+        for (var graceDeadline = _time.GetTimestamp() + ToTicks(TimeSpan.FromSeconds(1));
+             member is null && _time.GetTimestamp() < graceDeadline && !timeout.Token.IsCancellationRequested;)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            member = _members.FirstOrDefault(m => m.NodeId == target);
+        }
+
+        if (member is null)
+            return new SendResult(SendStatus.UnknownTarget, target);
         try
         {
             var status = await SendDirectMessageAsync(member, channel, payload, timeout.Token).ConfigureAwait(false);

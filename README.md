@@ -222,6 +222,20 @@ Every node keeps a full copy of the completion set (union-merged — completions
 - **Security**: TLS provides confidentiality; the shared secret provides authentication (mutual HMAC challenge-response inside the TLS channel). The self-signed certificate is auto-generated on first startup and stored at `<app dir>/colibra/<ServiceId>.pfx` — per-service, so multiple services on one machine never collide. Point `CertificatePath` elsewhere (or pre-provision your own PFX) if you prefer.
 - **Versioning**: nodes advertise their service version (defaults to the entry assembly's). `VersionCompatibility` controls who may cluster together: `MajorMatch` (default), `Strict`, `Minimum(version)` — handy for rolling deploys — or `Any`. Incompatible nodes simply form separate clusters. The wire protocol is versioned independently and incompatible protocol versions are always rejected at join.
 
+## Asymmetric clusters: forcing (or forbidding) coordinatorship
+
+By default any node can be elected coordinator. For asymmetric architectures — a game server that must be the authority, a head node with the fast hardware, dedicated broker processes — pin the roles:
+
+```csharp
+// The game server: IS the coordinator, always.
+options.CoordinatorMode = CoordinatorMode.Forced;
+
+// The game clients: members only, never elected.
+options.CoordinatorMode = CoordinatorMode.Never;
+```
+
+A `Forced` node never joins a non-forced coordinator: it claims leadership with a superseding term at startup and takes over an existing cluster cleanly (the incumbent steps down and rejoins as a member; held leases are re-asserted and survive). It never yields afterwards — a rival coordinator gets out-termed, not obeyed — and its claims bypass the quorum gate, so a lone game server always serves. If several `Forced` nodes meet, the first one up wins and later ones join it (simultaneous claims settle by the usual term/node-id rules). `Never` nodes join and work like any member, but when no coordinator is reachable they wait instead of claiming — deploy at least one `Eligible` or `Forced` node per cluster. While a forced coordinator is down, remaining `Eligible` nodes elect a stand-in among themselves; the forced node reclaims leadership on return.
+
 ## Cluster sizes, quorum and split brain
 
 | Nodes | Behavior |
@@ -257,6 +271,7 @@ Held leases keep renewing under every policy — a node never silently stops wor
 | `MemberTimeout` / `ElectionTimeout` / `RebuildWindow` / `DiscoveryWindow` | 5 s / 3 s / 2 s / 3 s | |
 | `LeaseTtl` / `LeaseRenewSafetyMargin` | 15 s / 3 s | Owner death → keys reclaimable within ~`LeaseTtl`. |
 | `SplitBrainPolicy` / `QuorumPolicy` | `DenyNewLeases` / `Majority` | |
+| `CoordinatorMode` | `Eligible` | `Forced` (this node IS the coordinator) / `Never` (member only) for asymmetric clusters. |
 | `EnableDecisionCache` / `DecisionCacheTtl` / `DecisionCacheMaxEntries` | `true` / 30 s / 10 000 | Caching of negative `CanProcess` answers. |
 | `OtherPreferenceGraceWindow` | 5 s | How long an `Other`-preference request waits for a willing node. |
 | `CertificatePath` | `<app dir>/colibra/<ServiceId>.pfx` | Auto-generated self-signed cert. |

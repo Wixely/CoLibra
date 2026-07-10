@@ -65,7 +65,17 @@ internal sealed class CoordinatorLeaseTable
         _graceTicks = (long)(options.OtherPreferenceGraceWindow.TotalSeconds * timeProvider.TimestampFrequency);
     }
 
-    public long Term { get; }
+    public long Term { get; private set; }
+
+    /// <summary>
+    /// Raises the term in place (Forced-coordinator takeover defense). Sequence numbering
+    /// continues, so fencing tokens stay strictly monotonic — the term only ever increases.
+    /// </summary>
+    public void EscalateTerm(long newTerm)
+    {
+        if (newTerm > Term)
+            Term = newTerm;
+    }
 
     public int LeaseCount => _leases.Count;
 

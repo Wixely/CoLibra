@@ -52,6 +52,32 @@ public enum SplitBrainPolicy
     ThrowOnAllOperations = 2,
 }
 
+/// <summary>
+/// This node's relationship to coordinatorship, for asymmetric architectures (e.g. a game
+/// server that must be the authority while its peers never lead).
+/// </summary>
+public enum CoordinatorMode
+{
+    /// <summary>Participates normally in elections (default).</summary>
+    Eligible = 0,
+
+    /// <summary>
+    /// Forces this node to be the coordinator: it never joins a non-forced coordinator, claims
+    /// coordinatorship with a superseding term at startup and after any loss, and escalates
+    /// over (never yields to) non-forced rivals. Forced claims bypass the quorum gate — the
+    /// node is the authority even alone. If several Forced nodes meet, they settle among
+    /// themselves by the normal term/node-id rules and the losers join the winner.
+    /// </summary>
+    Forced = 1,
+
+    /// <summary>
+    /// Never claims coordinatorship. The node discovers, joins and works as a member only; if
+    /// no eligible coordinator exists it waits, retrying, until one appears. A cluster of only
+    /// Never nodes will never form — deploy at least one Eligible or Forced node.
+    /// </summary>
+    Never = 2,
+}
+
 /// <summary>Quorum rule used when claiming coordinatorship.</summary>
 public enum QuorumPolicy
 {

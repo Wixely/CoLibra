@@ -480,6 +480,14 @@ internal sealed partial class CoLibraNode
             pending.Sent = false; // re-dispatched after the election settles
         FailAllPendingResolves(); // resolvers retry against whichever coordinator emerges
 
+        if (_options.CoordinatorMode == CoordinatorMode.Forced)
+        {
+            // No election: a Forced node claims outright with a superseding term; the rival
+            // machinery reconciles anyone else who thought they were leading.
+            BecomeCoordinator(++_highestTerm);
+            return;
+        }
+
         SetState(ClusterState.Electing);
         var proposedTerm = ++_highestTerm;
         _election = new ElectionRound { ProposedTerm = proposedTerm };
@@ -566,6 +574,13 @@ internal sealed partial class CoLibraNode
             return;
         }
 
+        if (_options.CoordinatorMode == CoordinatorMode.Never)
+        {
+            // This node never claims; keep waiting for someone eligible to appear.
+            _election.RetryDeadlineTs = Now() + 2 * ToTicks(_options.ElectionTimeout);
+            return;
+        }
+
         var reachable = contacts.Count(c => c.Reachable) + 1;
         var required = Quorum(Math.Max(_lastKnownClusterSize, reachable));
         if (_options.QuorumPolicy == QuorumPolicy.Off || reachable >= required)
@@ -596,7 +611,12 @@ internal sealed partial class CoLibraNode
                 : null;
 
         var orphaned = !isCoordinator && coordinatorHint is null;
-        var willContest = orphaned && LocalNodeId.Value.CompareTo(message.CandidateNodeId) > 0;
+        var willContest = _options.CoordinatorMode switch
+        {
+            CoordinatorMode.Forced => true, // a Forced node always claims; candidates should wait for it
+            CoordinatorMode.Never => false,
+            _ => orphaned && LocalNodeId.Value.CompareTo(message.CandidateNodeId) > 0,
+        };
 
         _ = SendSafeAsync(peer.Channel, new ElectionAliveMessage(
             _highestTerm, LocalNodeId.Value, willContest, isCoordinator,
@@ -662,10 +682,21 @@ internal sealed partial class CoLibraNode
 
                 if (now >= _discoveryDeadlineTs)
                 {
-                    if (_lastKnownClusterSize <= 1)
-                        BecomeCoordinator(_highestTerm + 1);
-                    else
-                        StartElectionCore(); // rejoin scenarios go through quorum-checked election
+                    switch (_options.CoordinatorMode)
+                    {
+                        case CoordinatorMode.Forced:
+                            BecomeCoordinator(_highestTerm + 1); // supersedes whatever exists
+                            break;
+                        case CoordinatorMode.Never:
+                            _discoveryDeadlineTs = now + ToTicks(_options.DiscoveryWindow); // keep looking
+                            break;
+                        default:
+                            if (_lastKnownClusterSize <= 1)
+                                BecomeCoordinator(_highestTerm + 1);
+                            else
+                                StartElectionCore(); // rejoin scenarios go through quorum-checked election
+                            break;
+                    }
                 }
 
                 break;

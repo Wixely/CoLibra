@@ -17,7 +17,7 @@ internal sealed partial class CoLibraNode
 
     private sealed class CoordinatorRole
     {
-        public required long Term { get; init; }
+        public required long Term { get; set; } // set only by EscalateTerm (Forced-mode defense)
         public required CoordinatorLeaseTable Table { get; init; }
         public Dictionary<NodeId, MemberSession> Sessions { get; } = [];
         public List<(NodeId Requester, LeaseAcquireMessage Message)> RebuildQueue { get; } = [];
@@ -214,11 +214,14 @@ internal sealed partial class CoLibraNode
         }, CancellationToken.None);
     }
 
+    private bool IsForced => _options.CoordinatorMode == CoordinatorMode.Forced;
+
     private void SendAnnounce()
     {
         var announce = _discoveryCodec.Encode(new AnnounceMessage(
             LocalNodeId.Value, _incarnation, _coordinator is not null,
-            _coordinator?.Term ?? _highestTerm, _serviceVersion.ToString(), _transport.MeshEndpoint.Port));
+            _coordinator?.Term ?? _highestTerm, _serviceVersion.ToString(), _transport.MeshEndpoint.Port,
+            Forced: IsForced));
         _ = Task.Run(async () =>
         {
             try
@@ -238,12 +241,12 @@ internal sealed partial class CoLibraNode
         {
             case AnnounceMessage a when a.NodeId != LocalNodeId.Value:
                 HandlePresence(new NodeId(a.NodeId), a.IsCoordinator, a.Term, a.ServiceVersion,
-                    new IPEndPoint(source.Address, a.MeshPort), null);
+                    new IPEndPoint(source.Address, a.MeshPort), null, a.Forced);
                 break;
 
             case ProbeReplyMessage r when r.NodeId != LocalNodeId.Value:
                 HandlePresence(new NodeId(r.NodeId), r.IsCoordinator, r.Term, r.ServiceVersion,
-                    new IPEndPoint(source.Address, r.MeshPort), ParseHint(r.CoordinatorHost, r.CoordinatorPort));
+                    new IPEndPoint(source.Address, r.MeshPort), ParseHint(r.CoordinatorHost, r.CoordinatorPort), r.Forced);
                 break;
 
             case ProbeMessage p when p.NodeId != LocalNodeId.Value:
@@ -271,7 +274,8 @@ internal sealed partial class CoLibraNode
             LocalNodeId.Value, _incarnation, _coordinator is not null,
             _coordinator?.Term ?? _highestTerm, _serviceVersion.ToString(), _transport.MeshEndpoint.Port,
             _coordinator is not null ? null : coordinatorEndpoint.Address.ToString(),
-            _coordinator is not null ? 0 : coordinatorEndpoint.Port));
+            _coordinator is not null ? 0 : coordinatorEndpoint.Port,
+            Forced: IsForced));
         _ = Task.Run(async () =>
         {
             try
@@ -294,7 +298,7 @@ internal sealed partial class CoLibraNode
     }
 
     private void HandlePresence(NodeId nodeId, bool isCoordinator, long term, string versionString,
-        IPEndPoint meshEndpoint, IPEndPoint? coordinatorHint)
+        IPEndPoint meshEndpoint, IPEndPoint? coordinatorHint, bool forced = false)
     {
         if (!Version.TryParse(versionString, out var peerVersion) ||
             !_options.VersionCompatibility.IsCompatible(_serviceVersion, peerVersion))
@@ -308,6 +312,11 @@ internal sealed partial class CoLibraNode
 
         _highestTerm = Math.Max(_highestTerm, term);
         var coordinatorEndpoint = isCoordinator ? meshEndpoint : coordinatorHint;
+
+        // A Forced node never joins a non-forced coordinator: it takes over at its discovery
+        // deadline instead. It does yield to a FORCED coordinator (first forced node wins).
+        if (IsForced && _coordinator is null && !(isCoordinator && forced))
+            return;
 
         switch (_state)
         {
@@ -324,18 +333,35 @@ internal sealed partial class CoLibraNode
                 break;
 
             case ClusterState.Coordinator or ClusterState.QuorumLost when _coordinator is { } coordinator && isCoordinator:
-                HandleRivalCoordinator(coordinator, nodeId, term, meshEndpoint);
+                HandleRivalCoordinator(coordinator, nodeId, term, meshEndpoint, forced);
                 break;
         }
     }
 
-    private void HandleRivalCoordinator(CoordinatorRole coordinator, NodeId rival, long rivalTerm, IPEndPoint rivalEndpoint)
+    private void HandleRivalCoordinator(CoordinatorRole coordinator, NodeId rival, long rivalTerm, IPEndPoint rivalEndpoint,
+        bool rivalForced)
     {
         Raise(SplitBrainDetected, new SplitBrainDetectedEventArgs
         {
             Kind = SplitBrainKind.RivalCoordinator,
             Detail = $"Rival coordinator {rival} (term {rivalTerm}) discovered; local term {coordinator.Term}.",
         });
+
+        if (IsForced && !rivalForced)
+        {
+            // A Forced coordinator never yields to a non-forced rival: it out-terms it instead
+            // and the rival's own step-down logic does the rest.
+            if (rivalTerm >= coordinator.Term)
+            {
+                var escalated = rivalTerm + 1;
+                _logger.LogWarning("Forced coordinator escalating term {Ours} -> {Escalated} over rival {Rival} (term {Term})",
+                    coordinator.Term, escalated, rival, rivalTerm);
+                EscalateTerm(coordinator, escalated);
+            }
+
+            SendAnnounce();
+            return;
+        }
 
         var rivalWins = rivalTerm > coordinator.Term ||
             (rivalTerm == coordinator.Term && rival > LocalNodeId);
@@ -350,6 +376,18 @@ internal sealed partial class CoLibraNode
         _logger.LogWarning("Stepping down: rival coordinator {Rival} (term {Term}) supersedes local term {Ours}",
             rival, rivalTerm, coordinator.Term);
         StepDownAndRejoin(rivalEndpoint);
+    }
+
+    /// <summary>
+    /// Raises the coordinator's term in place (Forced-mode takeover defense). Lease state and
+    /// sequence numbering carry over; fencing stays monotonic because the term only increases.
+    /// </summary>
+    private void EscalateTerm(CoordinatorRole coordinator, long newTerm)
+    {
+        coordinator.Term = newTerm;
+        coordinator.Table.EscalateTerm(newTerm);
+        _highestTerm = Math.Max(_highestTerm, newTerm);
+        UpdateCoordinatorMembership(coordinator); // members learn the new term immediately
     }
 
     private void StepDownAndRejoin(IPEndPoint rivalEndpoint)

@@ -10,9 +10,9 @@ public class RoutedDeliveryTests(ITestOutputHelper output) : IAsyncLifetime
     private static readonly Action<CoLibraOptions> WithRouting = o =>
     {
         o.Routing.Enabled = true;
-        o.Routing.DeliveryTimeout = TimeSpan.FromSeconds(2);
-        o.Routing.AssignmentAckTimeout = TimeSpan.FromMilliseconds(400);
-        o.Routing.OwnerCacheTtl = TimeSpan.FromSeconds(2);
+        o.Routing.DeliveryTimeout = TimeSpan.FromSeconds(2 * TestCluster.Scale);
+        o.Routing.AssignmentAckTimeout = TimeSpan.FromMilliseconds(400 * TestCluster.Scale);
+        o.Routing.OwnerCacheTtl = TimeSpan.FromSeconds(2 * TestCluster.Scale);
     };
 
     public ValueTask InitializeAsync() => ValueTask.CompletedTask;

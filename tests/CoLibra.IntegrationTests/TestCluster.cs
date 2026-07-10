@@ -17,7 +17,11 @@ internal sealed class TestCluster(ITestOutputHelper? output = null) : IAsyncDisp
     private readonly Dictionary<CoLibraNode, IPEndPoint> _endpoints = [];
     private readonly List<CoLibraNode> _nodes = [];
 
-    public static readonly TimeSpan Eventually = TimeSpan.FromSeconds(15);
+    // CI runners (2 cores, both test assemblies in parallel) stall long enough to trip the
+    // aggressive local timings, killing perfectly healthy nodes. Scale up under CI.
+    public static readonly int Scale = Environment.GetEnvironmentVariable("CI") is null ? 1 : 3;
+
+    public static readonly TimeSpan Eventually = TimeSpan.FromSeconds(15 * Scale);
 
     public async Task<CoLibraNode> StartNodeAsync(Action<CoLibraOptions>? mutate = null, bool waitForCluster = true)
     {
@@ -25,16 +29,16 @@ internal sealed class TestCluster(ITestOutputHelper? output = null) : IAsyncDisp
         {
             ServiceId = "svc",
             SharedSecret = "test-secret",
-            AnnounceInterval = TimeSpan.FromMilliseconds(150),
-            HeartbeatInterval = TimeSpan.FromMilliseconds(100),
-            MemberTimeout = TimeSpan.FromMilliseconds(600),
-            ElectionTimeout = TimeSpan.FromMilliseconds(400),
-            RebuildWindow = TimeSpan.FromMilliseconds(200),
-            DiscoveryWindow = TimeSpan.FromMilliseconds(400),
-            LeaseTtl = TimeSpan.FromSeconds(3),
-            LeaseRenewSafetyMargin = TimeSpan.FromMilliseconds(700),
-            OtherPreferenceGraceWindow = TimeSpan.FromMilliseconds(400),
-            DecisionCacheTtl = TimeSpan.FromSeconds(5),
+            AnnounceInterval = TimeSpan.FromMilliseconds(150 * Scale),
+            HeartbeatInterval = TimeSpan.FromMilliseconds(100 * Scale),
+            MemberTimeout = TimeSpan.FromMilliseconds(600 * Scale),
+            ElectionTimeout = TimeSpan.FromMilliseconds(400 * Scale),
+            RebuildWindow = TimeSpan.FromMilliseconds(200 * Scale),
+            DiscoveryWindow = TimeSpan.FromMilliseconds(400 * Scale),
+            LeaseTtl = TimeSpan.FromSeconds(3 * Scale),
+            LeaseRenewSafetyMargin = TimeSpan.FromMilliseconds(700 * Scale),
+            OtherPreferenceGraceWindow = TimeSpan.FromMilliseconds(400 * Scale),
+            DecisionCacheTtl = TimeSpan.FromSeconds(5 * Scale),
         };
         mutate?.Invoke(options);
 

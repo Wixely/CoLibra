@@ -10,7 +10,7 @@ public class MessagingTests(ITestOutputHelper output) : IAsyncLifetime
     private static Action<CoLibraOptions> WithMessaging(string? name = null) => o =>
     {
         o.Messaging.Enabled = true;
-        o.Messaging.DeliveryTimeout = TimeSpan.FromSeconds(2);
+        o.Messaging.DeliveryTimeout = TimeSpan.FromSeconds(2 * TestCluster.Scale);
         o.NodeName = name;
     };
 
@@ -137,6 +137,8 @@ public class MessagingTests(ITestOutputHelper output) : IAsyncLifetime
             return ValueTask.CompletedTask;
         });
 
+        // b (a member) learns of c via a pushed membership update; wait for it before sending.
+        await TestCluster.WaitUntilAsync(() => b.Members.Any(m => m.NodeId == c.LocalNodeId));
         var result = await b.Messenger.SendAsync(c.LocalNodeId, "chat", new byte[] { 9, 9 });
 
         Assert.Equal(SendStatus.Delivered, result.Status);

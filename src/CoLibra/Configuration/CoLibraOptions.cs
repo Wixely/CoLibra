@@ -90,6 +90,13 @@ public sealed class CoLibraOptions
     /// <summary>Quorum rule for coordinator claims. Default <see cref="CoLibra.QuorumPolicy.Majority"/>.</summary>
     public QuorumPolicy QuorumPolicy { get; set; } = QuorumPolicy.Majority;
 
+    /// <summary>
+    /// This node's coordinatorship stance: <see cref="CoordinatorMode.Eligible"/> (default),
+    /// <see cref="CoordinatorMode.Forced"/> (this node IS the coordinator — asymmetric
+    /// architectures like game servers), or <see cref="CoordinatorMode.Never"/> (member only).
+    /// </summary>
+    public CoordinatorMode CoordinatorMode { get; set; } = CoordinatorMode.Eligible;
+
     /// <summary>Caches negative CanProcess answers locally (push-invalidated by the coordinator). Default true.</summary>
     public bool EnableDecisionCache { get; set; } = true;
 

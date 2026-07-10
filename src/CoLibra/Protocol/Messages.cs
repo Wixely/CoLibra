@@ -93,7 +93,8 @@ internal sealed record AnnounceMessage(
     bool IsCoordinator,
     long Term,
     string ServiceVersion,
-    int MeshPort) : Message
+    int MeshPort,
+    bool Forced = false) : Message
 {
     public override MessageType Type => MessageType.Announce;
 }
@@ -111,7 +112,8 @@ internal sealed record ProbeReplyMessage(
     string ServiceVersion,
     int MeshPort,
     string? CoordinatorHost,
-    int CoordinatorPort) : Message
+    int CoordinatorPort,
+    bool Forced = false) : Message
 {
     public override MessageType Type => MessageType.ProbeReply;
 }
