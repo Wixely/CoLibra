@@ -21,7 +21,16 @@ public enum LeaseLossReason
 
     /// <summary>The coordinator reported the lease as owned by another node.</summary>
     OwnedElsewhere = 2,
+
+    /// <summary>Revoked by <see cref="ICoLibraCluster.ForceRebalanceAsync"/> to shed excess load.</summary>
+    Rebalanced = 3,
 }
+
+/// <summary>Outcome of <see cref="ICoLibraCluster.ForceRebalanceAsync"/>.</summary>
+/// <param name="WasCoordinator">False when called on a non-coordinator (the call did nothing).</param>
+/// <param name="LeasesRevoked">How many leases were revoked to restore balance (0 when already balanced).</param>
+/// <param name="NodesShed">How many nodes gave up at least one lease.</param>
+public readonly record struct RebalanceResult(bool WasCoordinator, int LeasesRevoked, int NodesShed);
 
 /// <summary>Raised when a key this node was previously denied becomes available again.</summary>
 public sealed class LeaseAvailableEventArgs : EventArgs

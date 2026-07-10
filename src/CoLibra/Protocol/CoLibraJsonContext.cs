@@ -23,6 +23,7 @@ namespace CoLibra.Protocol;
 [JsonSerializable(typeof(LeaseReleaseMessage))]
 [JsonSerializable(typeof(LeaseAvailableNotifyMessage))]
 [JsonSerializable(typeof(CompletionSyncMessage))]
+[JsonSerializable(typeof(LeaseRevokedMessage))]
 [JsonSerializable(typeof(ElectionStartMessage))]
 [JsonSerializable(typeof(ElectionAliveMessage))]
 [JsonSerializable(typeof(ErrorMessage))]
@@ -65,6 +66,7 @@ internal sealed class JsonTypeInfoResolverForMessages
         LeaseReleaseMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseReleaseMessage),
         LeaseAvailableNotifyMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseAvailableNotifyMessage),
         CompletionSyncMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.CompletionSyncMessage),
+        LeaseRevokedMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseRevokedMessage),
         ElectionStartMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.ElectionStartMessage),
         ElectionAliveMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.ElectionAliveMessage),
         ErrorMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.ErrorMessage),
@@ -102,6 +104,7 @@ internal sealed class JsonTypeInfoResolverForMessages
         MessageType.LeaseRelease => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseReleaseMessage),
         MessageType.LeaseAvailableNotify => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseAvailableNotifyMessage),
         MessageType.CompletionSync => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.CompletionSyncMessage),
+        MessageType.LeaseRevoked => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseRevokedMessage),
         MessageType.ElectionStart => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.ElectionStartMessage),
         MessageType.ElectionAlive => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.ElectionAliveMessage),
         MessageType.Error => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.ErrorMessage),

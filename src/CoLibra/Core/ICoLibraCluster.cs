@@ -64,6 +64,17 @@ public interface ICoLibraCluster
     bool IsAcceptingWork { get; }
 
     /// <summary>
+    /// Coordinator-only: re-evaluates every node's load and revokes the minimum set of leases
+    /// needed to bring the cluster within tolerance (nodes at or below the mean are untouched;
+    /// overloaded nodes shed only their excess, newest grants first; non-accepting nodes shed
+    /// everything — the drain pattern). Freed keys redistribute through normal steering.
+    /// Safe to call on ANY node: non-coordinators silently do nothing and return
+    /// <c>WasCoordinator = false</c>. <paramref name="type"/> limits the pass to one lease type;
+    /// null covers every type whose balance policy isn't <see cref="LoadBalanceType.None"/>.
+    /// </summary>
+    ValueTask<RebalanceResult> ForceRebalanceAsync(string? type = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Turns work acceptance on or off at runtime (advertised to the coordinator on the next
     /// heartbeat). Turning it off denies new acquisitions and excludes this node from balancing
     /// and forced assignment; leases already held are never revoked and keep renewing.

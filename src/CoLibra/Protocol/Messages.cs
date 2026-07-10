@@ -32,6 +32,7 @@ internal enum MessageType : byte
     LeaseRelease = 32,
     LeaseAvailableNotify = 33,
     CompletionSync = 34,
+    LeaseRevoked = 35,
 
     // Election
     ElectionStart = 40,
@@ -258,6 +259,12 @@ internal sealed record LeaseReleaseMessage(
 internal sealed record LeaseAvailableNotifyMessage(IReadOnlyList<LeaseKeyDto> Keys) : Message
 {
     public override MessageType Type => MessageType.LeaseAvailableNotify;
+}
+
+/// <summary>Coordinator → owner: these leases were revoked by a forced rebalance; drop them now.</summary>
+internal sealed record LeaseRevokedMessage(IReadOnlyList<LeaseKeyDto> Keys) : Message
+{
+    public override MessageType Type => MessageType.LeaseRevoked;
 }
 
 /// <summary>

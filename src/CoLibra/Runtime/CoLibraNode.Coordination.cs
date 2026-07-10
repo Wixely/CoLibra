@@ -80,6 +80,11 @@ internal sealed partial class CoLibraNode
                 HandleLeaseAvailable(m.Keys.Select(k => k.ToKey()).ToList());
                 break;
 
+            case LeaseRevokedMessage m when peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer):
+                foreach (var key in m.Keys)
+                    RemoveHeld(key.ToKey(), LeaseLossReason.Rebalanced);
+                break;
+
             // ---- routed delivery ----
             case OwnerResolveMessage m when _coordinator is { } coordinator:
                 HandleOwnerResolveAsCoordinator(coordinator, peer.PeerId, m);

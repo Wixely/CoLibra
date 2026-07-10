@@ -252,6 +252,21 @@ Every node keeps a full copy of the completion set (union-merged — completions
 - **Security**: TLS provides confidentiality; the shared secret provides authentication (mutual HMAC challenge-response inside the TLS channel). The self-signed certificate is auto-generated on first startup and stored at `<app dir>/colibra/<ServiceId>.pfx` — per-service, so multiple services on one machine never collide. Point `CertificatePath` elsewhere (or pre-provision your own PFX) if you prefer.
 - **Versioning**: nodes advertise their service version (defaults to the entry assembly's). `VersionCompatibility` controls who may cluster together: `MajorMatch` (default), `Strict`, `Minimum(version)` — handy for rolling deploys — or `Any`. Incompatible nodes simply form separate clusters. The wire protocol is versioned independently and incompatible protocol versions are always rejected at join.
 
+## Forcing a rebalance
+
+Steer-only balancing never revokes, so rare shapes can stay imbalanced (a node that acquired everything before its peers joined, work that never completes and releases). `ForceRebalanceAsync` is the explicit correction — the one sanctioned exception to steer-only:
+
+```csharp
+RebalanceResult result = await cluster.ForceRebalanceAsync();      // all balanced types
+await cluster.ForceRebalanceAsync("sourceid");                     // one type only
+```
+
+**Only the coordinator acts.** On any other node the call silently does nothing and returns `WasCoordinator = false` — never throws — so the same code runs safely anywhere, on a timer or after membership changes.
+
+**Movement is minimal.** All nodes are re-evaluated, but only nodes above `mean + LoadBalanceTolerance` shed anything, and only their excess (down to the mean, newest grants first, so long-running work moves last). Everyone else is untouched — no revocations, no churn, and never any "disconnect": connections and membership are unaffected. An already-balanced cluster moves zero leases. `LoadBalanceType.None` types are skipped (FCFS by design). One deliberate exception: nodes with `AcceptWork = false` shed *everything* — `SetAcceptingWorkAsync(false)` + `ForceRebalanceAsync()` is the complete drain-a-node pattern.
+
+**How a lease moves safely**: the owner is told immediately (`LeaseLost` fires with reason `Rebalanced`) and the key enters a short hold-down (~2.5 heartbeats) during which nobody can acquire it and the old owner's renewals can't re-adopt it — so the old owner provably stops before anyone starts. Freed keys are then push-announced and redistribute through normal steering (`Balanced` grants steer to the underloaded; routed types re-force-assign). The old owner's local `CanProcess` window is at most one heartbeat; as always, guard external writes with fencing tokens.
+
 ## Asymmetric clusters: forcing (or forbidding) coordinatorship
 
 By default any node can be elected coordinator. For asymmetric architectures — a game server that must be the authority, a head node with the fast hardware, dedicated broker processes — pin the roles:

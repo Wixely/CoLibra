@@ -238,6 +238,41 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
     public bool IsAcceptingWork => _acceptWork;
 
+    public ValueTask<RebalanceResult> ForceRebalanceAsync(string? type = null, CancellationToken cancellationToken = default) =>
+        new(PostWithResult<RebalanceResult>(tcs =>
+        {
+            if (_coordinator is not { } coordinator)
+            {
+                tcs.TrySetResult(new RebalanceResult(false, 0, 0)); // not the coordinator: silently do nothing
+                return ValueTask.CompletedTask;
+            }
+
+            var revocations = coordinator.Table.ForceRebalance(type, Now());
+            foreach (var group in revocations.GroupBy(r => r.Owner))
+            {
+                if (group.Key == LocalNodeId)
+                {
+                    foreach (var (_, key) in group)
+                        RemoveHeld(key, LeaseLossReason.Rebalanced);
+                }
+                else if (coordinator.Sessions.TryGetValue(group.Key, out var session))
+                {
+                    _ = SendSafeAsync(session.Connection,
+                        new LeaseRevokedMessage([.. group.Select(r => LeaseKeyDto.From(r.Key))]));
+                }
+            }
+
+            var nodesShed = revocations.Select(r => r.Owner).Distinct().Count();
+            if (revocations.Count > 0)
+            {
+                _logger.LogInformation("Forced rebalance revoked {Count} lease(s) from {Nodes} node(s){Type}",
+                    revocations.Count, nodesShed, type is null ? "" : $" (type '{type}')");
+            }
+
+            tcs.TrySetResult(new RebalanceResult(true, revocations.Count, nodesShed));
+            return ValueTask.CompletedTask;
+        }).WaitAsync(cancellationToken));
+
     public ValueTask SetAcceptingWorkAsync(bool accept, CancellationToken cancellationToken = default) =>
         new(PostWithResult<bool>(tcs =>
         {

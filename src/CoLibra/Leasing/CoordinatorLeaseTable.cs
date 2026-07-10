@@ -54,6 +54,8 @@ internal sealed class CoordinatorLeaseTable
     private readonly Dictionary<string, Dictionary<NodeId, int>> _countsByType = new(StringComparer.Ordinal);
     private readonly Dictionary<NodeId, double> _nodeWeights = [];
     private readonly HashSet<NodeId> _notAccepting = [];
+    private readonly Dictionary<LeaseKey, (NodeId OldOwner, long UntilTs)> _revoked = [];
+    private readonly long _revokeHoldTicks;
     private long _sequence;
 
     public CoordinatorLeaseTable(long term, CoLibraOptions options, TimeProvider timeProvider,
@@ -64,6 +66,9 @@ internal sealed class CoordinatorLeaseTable
         _completions = completions;
         _ttlTicks = (long)(options.LeaseTtl.TotalSeconds * timeProvider.TimestampFrequency);
         _graceTicks = (long)(options.OtherPreferenceGraceWindow.TotalSeconds * timeProvider.TimestampFrequency);
+        // Hold-down after a forced revocation: long enough for the old owner to hear (push or
+        // next renewal) and stop before anyone new can be granted the key.
+        _revokeHoldTicks = (long)(options.HeartbeatInterval.TotalSeconds * 2.5 * timeProvider.TimestampFrequency);
     }
 
     public long Term { get; private set; }
@@ -143,6 +148,22 @@ internal sealed class CoordinatorLeaseTable
             {
                 Immediate = new GrantDecision(requester, requestId, key, false, default, LeaseDenialReason.NotAcceptingWork, null),
             };
+        }
+
+        // Freshly revoked keys are held down until the old owner has provably stopped;
+        // report them as still held so the exclusivity guarantee survives the move.
+        if (_revoked.TryGetValue(key, out var revoked))
+        {
+            if (nowTs < revoked.UntilTs)
+            {
+                RegisterInterest(key, requester);
+                return new AcquireOutcome
+                {
+                    Immediate = new GrantDecision(requester, requestId, key, false, default, LeaseDenialReason.HeldByOther, revoked.OldOwner),
+                };
+            }
+
+            _revoked.Remove(key); // expired; fall through to a normal grant
         }
 
         if (_leases.TryGetValue(key, out var entry))
@@ -229,6 +250,10 @@ internal sealed class CoordinatorLeaseTable
             {
                 lost.Add(key); // completed keys are never re-adopted; the renewer must drop it
             }
+            else if (_revoked.ContainsKey(key))
+            {
+                lost.Add(key); // forcibly rebalanced: the old owner must drop it, not re-adopt it
+            }
             else
             {
                 // Expired here but the owner still renews (e.g. right after failover): the key is
@@ -253,6 +278,12 @@ internal sealed class CoordinatorLeaseTable
             if (_completions?.Contains(key) == true)
             {
                 rejected.Add(key); // the key finished elsewhere while this node was away
+                continue;
+            }
+
+            if (_revoked.ContainsKey(key))
+            {
+                rejected.Add(key); // rebalanced away while this node was rejoining
                 continue;
             }
 
@@ -332,6 +363,14 @@ internal sealed class CoordinatorLeaseTable
             outcome.Freed.Add((key, TakeInterest(key, exclude: entry.Owner)));
         }
 
+        // Revocation hold-downs that have elapsed: the old owner has provably stopped
+        // (renewal cycle passed); the keys are now genuinely free — tell the interested.
+        foreach (var (key, revoked) in _revoked.Where(kv => kv.Value.UntilTs <= nowTs).ToList())
+        {
+            _revoked.Remove(key);
+            outcome.Freed.Add((key, TakeInterest(key, exclude: revoked.OldOwner)));
+        }
+
         foreach (var (key, pending) in _pendingOther.ToList())
         {
             if (_leases.ContainsKey(key))
@@ -371,6 +410,78 @@ internal sealed class CoordinatorLeaseTable
     }
 
     public IReadOnlyDictionary<string, Dictionary<NodeId, int>> CountsByType => _countsByType;
+
+    /// <summary>
+    /// Revokes the minimum set of leases needed to bring every node within tolerance of the
+    /// mean load, per type. Nodes at or below the mean are untouched; overloaded nodes shed
+    /// only their excess (newest grants first); non-accepting nodes shed everything (drain).
+    /// Revoked keys enter the hold-down (see <see cref="Sweep"/>) and redistribute via normal
+    /// steering. Types with <see cref="LoadBalanceType.None"/> are skipped — FCFS by design.
+    /// </summary>
+    public List<(NodeId Owner, LeaseKey Key)> ForceRebalance(string? typeFilter, long nowTs)
+    {
+        var revocations = new List<(NodeId, LeaseKey)>();
+        List<string> types = typeFilter is not null ? [typeFilter] : [.. _countsByType.Keys];
+        foreach (var type in types)
+        {
+            var balance = _options.PerTypeLoadBalance.TryGetValue(type, out var perType)
+                ? perType
+                : _options.DefaultLoadBalance;
+            if (balance == LoadBalanceType.None)
+                continue;
+            if (!_countsByType.TryGetValue(type, out var counts) || counts.Count == 0)
+                continue;
+
+            double WeightOf(NodeId node) => balance == LoadBalanceType.Weighted
+                ? Math.Max(_nodeWeights.GetValueOrDefault(node, 1.0), 0.001)
+                : 1.0;
+
+            var accepting = _nodeWeights.Keys.Where(n => !_notAccepting.Contains(n)).ToList();
+            if (accepting.Count == 0)
+                continue; // nowhere for shed leases to go
+
+            var totalCount = counts.Values.Sum();
+            var meanLoad = totalCount / accepting.Sum(WeightOf);
+
+            foreach (var (owner, count) in counts.ToList())
+            {
+                int targetKeys;
+                if (_notAccepting.Contains(owner))
+                {
+                    targetKeys = 0; // draining: everything moves
+                }
+                else
+                {
+                    var load = count / WeightOf(owner);
+                    if (load <= meanLoad + _options.LoadBalanceTolerance)
+                        continue; // within tolerance: untouched
+                    targetKeys = (int)Math.Ceiling(meanLoad * WeightOf(owner));
+                }
+
+                var shed = count - targetKeys;
+                if (shed <= 0)
+                    continue;
+
+                // Newest grants first: long-running work is the last thing to ever move.
+                var victims = _leases
+                    .Where(kv => kv.Key.Type == type && kv.Value.Owner == owner)
+                    .OrderByDescending(kv => kv.Value.Token.Sequence)
+                    .Take(shed)
+                    .Select(kv => kv.Key)
+                    .ToList();
+                foreach (var key in victims)
+                {
+                    _leases.Remove(key);
+                    AdjustCount(type, owner, -1);
+                    _pendingOther.Remove(key);
+                    _revoked[key] = (owner, nowTs + _revokeHoldTicks);
+                    revocations.Add((owner, key));
+                }
+            }
+        }
+
+        return revocations;
+    }
 
     private GrantDecision Grant(NodeId requester, Guid requestId, LeaseKey key, long nowTs)
     {
