@@ -54,6 +54,8 @@ internal enum MessageType : byte
     // UDP data-plane link establishment (key exchange rides the TCP mesh)
     UdpLinkOffer = 74,
     UdpLinkAccept = 75,
+    UdpPunchRequest = 76,
+    UdpPunchInstruct = 77,
 }
 
 internal abstract record Message
@@ -441,4 +443,19 @@ internal sealed record UdpLinkAcceptMessage(
     Dictionary<string, byte> Channels) : Message
 {
     public override MessageType Type => MessageType.UdpLinkAccept;
+}
+
+/// <summary>Member → coordinator: the direct connect for this link failed; please introduce us.</summary>
+internal sealed record UdpPunchRequestMessage(Guid LinkId, Guid OriginNodeId, Guid TargetNodeId) : Message
+{
+    public override MessageType Type => MessageType.UdpPunchRequest;
+}
+
+/// <summary>
+/// Coordinator → both parties: send a NAT introduce request (token = LinkId "N" format) to my
+/// UDP endpoint so I can observe your public mappings and punch you together.
+/// </summary>
+internal sealed record UdpPunchInstructMessage(Guid LinkId, Guid PeerNodeId, int MasterUdpPort) : Message
+{
+    public override MessageType Type => MessageType.UdpPunchInstruct;
 }

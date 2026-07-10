@@ -40,6 +40,7 @@ internal sealed partial class CoLibraNode
         public int PeerWireId { get; set; }
         public long FailedUntilTs { get; set; }
         public string? ExpectedConnectionKey { get; set; }
+        public string? ConnectionKey { get; set; } // set on the initiator only; enables punch retry
         public List<TaskCompletionSource<bool>> ActivationWaiters { get; } = [];
         public Dictionary<long, TaskCompletionSource<DirectAckStatus>> PendingAcks { get; } = [];
 
@@ -62,6 +63,23 @@ internal sealed partial class CoLibraNode
     {
         if (_udpEngine is null || !_options.Messaging.Enabled || !_options.Messaging.PreferUdp)
             return;
+
+        if (_options.Messaging.EnableNatPunch && _udpEngine is INatPunchCapable punchable)
+        {
+            punchable.EnableNatPunch(new NatPunchCallbacks
+            {
+                IntroductionRequested = (local, remote, token) => Post(() =>
+                {
+                    HandlePunchIntroductionRequested(local, remote, token);
+                    return ValueTask.CompletedTask;
+                }),
+                IntroductionSucceeded = (target, viaInternal, token) => Post(() =>
+                {
+                    HandlePunchIntroductionSucceeded(target, token);
+                    return ValueTask.CompletedTask;
+                }),
+            });
+        }
 
         var callbacks = new UdpEngineCallbacks
         {
@@ -243,7 +261,11 @@ internal sealed partial class CoLibraNode
             return link;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopping.Token);
-        timeout.CancelAfter(_options.Messaging.LinkHandshakeTimeout);
+        // Punching runs as a second phase after a failed direct connect; budget both.
+        var budget = _options.Messaging.EnableNatPunch && _udpEngine is INatPunchCapable
+            ? 2 * _options.Messaging.LinkHandshakeTimeout
+            : _options.Messaging.LinkHandshakeTimeout;
+        timeout.CancelAfter(budget);
         try
         {
             return await waiter.Task.WaitAsync(timeout.Token).ConfigureAwait(false) ? link : null;
@@ -406,23 +428,39 @@ internal sealed partial class CoLibraNode
         link.PeerChannels = accept.Channels;
         link.PeerWireId = member.WireId;
         link.Crypto = UdpLinkCrypto.Derive(_keys, link.LinkId, link.MyNonce, accept.Nonce, link.Term, isOfferer: true);
-        var connectionKey = UdpLinkCrypto.ConnectionProof(_keys, link.LinkId, link.MyNonce, accept.Nonce);
-        // 127.x.x.x aliases reply from 127.0.0.1, and the engine matches packets by exact
-        // remote endpoint — normalize so loopback (same-machine) clusters connect cleanly.
-        var address = IPAddress.IsLoopback(member.Endpoint.Address) ? IPAddress.Loopback : member.Endpoint.Address;
-        var endpoint = new IPEndPoint(address, accept.UdpPort);
+        link.ConnectionKey = UdpLinkCrypto.ConnectionProof(_keys, link.LinkId, link.MyNonce, accept.Nonce);
+        var endpoint = new IPEndPoint(NormalizeLoopback(member.Endpoint.Address), accept.UdpPort);
+
+        BeginEngineConnect(link, endpoint, allowPunchOnFailure: true);
+    }
+
+    /// <summary>
+    /// 127.x.x.x aliases reply from 127.0.0.1, and the engine matches packets by exact remote
+    /// endpoint — normalize so loopback (same-machine) clusters connect cleanly.
+    /// </summary>
+    private static IPAddress NormalizeLoopback(IPAddress address) =>
+        IPAddress.IsLoopback(address) ? IPAddress.Loopback : address;
+
+    /// <summary>Actor-only: attempts the engine connect off-actor and completes the link on return.</summary>
+    private void BeginEngineConnect(UdpLink link, IPEndPoint endpoint, bool allowPunchOnFailure)
+    {
+        // When punching could follow, the direct attempt gets half the handshake budget.
+        var punchable = allowPunchOnFailure && PunchPossible(link.Peer);
+        var budget = punchable
+            ? TimeSpan.FromTicks(_options.Messaging.LinkHandshakeTimeout.Ticks / 2)
+            : _options.Messaging.LinkHandshakeTimeout;
 
         _ = Task.Run(async () =>
         {
             IUdpPeer? enginePeer = null;
             try
             {
-                enginePeer = await _udpEngine!.ConnectAsync(
-                    endpoint, connectionKey, _options.Messaging.LinkHandshakeTimeout, _stopping.Token).ConfigureAwait(false);
+                enginePeer = await _udpEngine!.ConnectAsync(endpoint, link.ConnectionKey!, budget, _stopping.Token)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogDebug(ex, "UDP connect to {Peer} at {Endpoint} failed", origin, endpoint);
+                _logger.LogDebug(ex, "UDP connect to {Peer} at {Endpoint} failed", link.Peer, endpoint);
             }
 
             Post(() =>
@@ -435,21 +473,147 @@ internal sealed partial class CoLibraNode
 
                 if (enginePeer is null)
                 {
+                    if (punchable && TryStartPunch(link))
+                        return ValueTask.CompletedTask; // stay handshaking; punch continues the story
+
                     link.FailedUntilTs = Now() + ToTicks(UdpLinkFailureBackoff);
                     CloseUdpLink(link, "engine connect failed");
                     return ValueTask.CompletedTask;
                 }
 
-                enginePeer.Tag = link;
-                link.EnginePeer = enginePeer;
-                link.Status = UdpLinkStatus.Active;
-                foreach (var waiter in link.ActivationWaiters)
-                    waiter.TrySetResult(true);
-                link.ActivationWaiters.Clear();
-                _logger.LogDebug("UDP link to {Peer} active ({Endpoint})", origin, endpoint);
+                ActivateUdpLink(link, enginePeer, endpoint);
                 return ValueTask.CompletedTask;
             });
         }, CancellationToken.None);
+    }
+
+    private void ActivateUdpLink(UdpLink link, IUdpPeer enginePeer, IPEndPoint endpoint)
+    {
+        enginePeer.Tag = link;
+        link.EnginePeer = enginePeer;
+        link.Status = UdpLinkStatus.Active;
+        foreach (var waiter in link.ActivationWaiters)
+            waiter.TrySetResult(true);
+        link.ActivationWaiters.Clear();
+        _logger.LogDebug("UDP link to {Peer} active ({Endpoint})", link.Peer, endpoint);
+    }
+
+    // =====================================================================================
+    // NAT hole punching (coordinator = rendezvous master; token = LinkId "N")
+    // =====================================================================================
+
+    /// <summary>Punch works member↔member with a UDP-running coordinator as the introducer.</summary>
+    private bool PunchPossible(NodeId peer)
+    {
+        if (!_options.Messaging.EnableNatPunch || _udpEngine is not INatPunchCapable || _coordinator is not null)
+            return false;
+
+        var coordinatorMember = _members.FirstOrDefault(m => m.IsCoordinator);
+        var target = _members.FirstOrDefault(m => m.NodeId == peer);
+        return coordinatorMember is { UdpPort: > 0 } && target is { IsCoordinator: false };
+    }
+
+    /// <summary>Actor-only: asks the coordinator to introduce us to the link's peer.</summary>
+    private bool TryStartPunch(UdpLink link)
+    {
+        if (_member is not { Connection: { } conn })
+            return false;
+
+        _logger.LogDebug("Direct UDP connect to {Peer} failed; requesting NAT punch via the coordinator", link.Peer);
+        _ = SendSafeAsync(conn, new UdpPunchRequestMessage(link.LinkId, LocalNodeId.Value, link.Peer.Value));
+        return true;
+    }
+
+    /// <summary>Coordinator: fan the punch instruction out to both parties and await their introduce requests.</summary>
+    private void HandleUdpPunchRequest(PeerConn peer, UdpPunchRequestMessage request)
+    {
+        if (_coordinator is not { } coordinator || _udpEngine is not INatPunchCapable ||
+            !_options.Messaging.EnableNatPunch || _udpListenPort <= 0 ||
+            peer.PeerId.Value != request.OriginNodeId)
+        {
+            return;
+        }
+
+        if (!coordinator.Sessions.TryGetValue(new NodeId(request.OriginNodeId), out var originSession) ||
+            !coordinator.Sessions.TryGetValue(new NodeId(request.TargetNodeId), out var targetSession) ||
+            originSession.Dto.UdpPort <= 0 || targetSession.Dto.UdpPort <= 0)
+        {
+            return;
+        }
+
+        var token = request.LinkId.ToString("N");
+        coordinator.PendingPunches[token] = new PendingPunch
+        {
+            DeadlineTs = Now() + ToTicks(_options.Messaging.LinkHandshakeTimeout),
+        };
+
+        _ = SendSafeAsync(originSession.Connection,
+            new UdpPunchInstructMessage(request.LinkId, request.TargetNodeId, _udpListenPort));
+        _ = SendSafeAsync(targetSession.Connection,
+            new UdpPunchInstructMessage(request.LinkId, request.OriginNodeId, _udpListenPort));
+    }
+
+    /// <summary>Member (both parties): fire the introduce request at the coordinator's UDP socket.</summary>
+    private void HandleUdpPunchInstruct(PeerConn peer, UdpPunchInstructMessage instruct)
+    {
+        if (_udpEngine is not INatPunchCapable punchable || !_options.Messaging.EnableNatPunch ||
+            _member is not { } member || !peer.IsCoordinatorLink || !IsCurrentCoordinatorLink(peer))
+        {
+            return;
+        }
+
+        var master = new IPEndPoint(NormalizeLoopback(member.CoordinatorEndpoint.Address), instruct.MasterUdpPort);
+        punchable.SendIntroduceRequest(master, instruct.LinkId.ToString("N"));
+    }
+
+    /// <summary>Coordinator (master): pair the two introduce requests for a token and punch them together.</summary>
+    private void HandlePunchIntroductionRequested(IPEndPoint local, IPEndPoint remote, string token)
+    {
+        if (_coordinator is not { } coordinator || _udpEngine is not INatPunchCapable punchable ||
+            !coordinator.PendingPunches.TryGetValue(token, out var pending))
+        {
+            return;
+        }
+
+        if (pending.Introductions.Any(i => i.External.Equals(remote)))
+            return; // duplicate/retransmitted request from the same party
+
+        pending.Introductions.Add((local, remote));
+        if (pending.Introductions.Count < 2)
+            return;
+
+        coordinator.PendingPunches.Remove(token);
+        var (host, client) = (pending.Introductions[0], pending.Introductions[1]);
+        _logger.LogDebug("NAT-introducing {HostExternal} and {ClientExternal} for token {Token}",
+            host.External, client.External, token);
+        punchable.Introduce(host.Internal, host.External, client.Internal, client.External, token);
+    }
+
+    /// <summary>Initiator: a punched endpoint candidate arrived — try the authenticated connect on it.</summary>
+    private void HandlePunchIntroductionSucceeded(IPEndPoint target, string token)
+    {
+        var link = _udpLinks.Values.FirstOrDefault(l =>
+            l.LinkId.ToString("N") == token && l.ConnectionKey is not null &&
+            l.Status == UdpLinkStatus.Handshaking && l.EnginePeer is null);
+        if (link is null)
+            return; // the acceptor side (or a stale token): the punch already opened our mapping, nothing to do
+
+        BeginEngineConnect(link, target, allowPunchOnFailure: false);
+    }
+
+    internal sealed class PendingPunch
+    {
+        public required long DeadlineTs { get; init; }
+        public List<(IPEndPoint Internal, IPEndPoint External)> Introductions { get; } = [];
+    }
+
+    private void TickPendingPunches(CoordinatorRole coordinator, long now)
+    {
+        if (coordinator.PendingPunches.Count == 0)
+            return;
+
+        foreach (var (token, pending) in coordinator.PendingPunches.Where(kv => kv.Value.DeadlineTs <= now).ToList())
+            coordinator.PendingPunches.Remove(token);
     }
 
     // =====================================================================================

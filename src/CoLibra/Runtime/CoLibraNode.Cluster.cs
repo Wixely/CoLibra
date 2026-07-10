@@ -27,6 +27,7 @@ internal sealed partial class CoLibraNode
         public Dictionary<NodeId, long> RecentlyDeparted { get; } = [];
         public List<LeaseKeyDto> PendingCompletionSync { get; } = [];
         public Dictionary<LeaseKey, PendingAssignment> PendingAssignments { get; } = [];
+        public Dictionary<string, PendingPunch> PendingPunches { get; } = new(StringComparer.Ordinal);
         public int NextWireId { get; set; } = 2; // 1 = the coordinator itself, 0 = unassigned
 
         public void DisposeAllSessions()

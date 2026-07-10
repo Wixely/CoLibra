@@ -36,6 +36,8 @@ namespace CoLibra.Protocol;
 [JsonSerializable(typeof(DirectMessageAckMessage))]
 [JsonSerializable(typeof(UdpLinkOfferMessage))]
 [JsonSerializable(typeof(UdpLinkAcceptMessage))]
+[JsonSerializable(typeof(UdpPunchRequestMessage))]
+[JsonSerializable(typeof(UdpPunchInstructMessage))]
 internal sealed partial class CoLibraJsonContext : JsonSerializerContext
 {
     public static JsonTypeInfoResolverForMessages Resolver { get; } = new();
@@ -76,6 +78,8 @@ internal sealed class JsonTypeInfoResolverForMessages
         DirectMessageAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.DirectMessageAckMessage),
         UdpLinkOfferMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.UdpLinkOfferMessage),
         UdpLinkAcceptMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.UdpLinkAcceptMessage),
+        UdpPunchRequestMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.UdpPunchRequestMessage),
+        UdpPunchInstructMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.UdpPunchInstructMessage),
         _ => throw new NotSupportedException($"Unknown message type {message.GetType()}"),
     };
 
@@ -111,6 +115,8 @@ internal sealed class JsonTypeInfoResolverForMessages
         MessageType.DirectMessageAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.DirectMessageAckMessage),
         MessageType.UdpLinkOffer => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.UdpLinkOfferMessage),
         MessageType.UdpLinkAccept => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.UdpLinkAcceptMessage),
+        MessageType.UdpPunchRequest => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.UdpPunchRequestMessage),
+        MessageType.UdpPunchInstruct => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.UdpPunchInstructMessage),
         _ => null, // unknown message types are ignored for forward compatibility
     };
 }

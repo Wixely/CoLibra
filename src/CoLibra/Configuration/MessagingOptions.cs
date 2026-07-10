@@ -50,4 +50,12 @@ public sealed class MessagingOptions
     /// (game-state payloads should be small; large blobs belong on TCP). Default 8 KiB.
     /// </summary>
     public int MaxUdpPayloadBytes { get; set; } = 8 * 1024;
+
+    /// <summary>
+    /// When a direct UDP connect fails (peers behind NATs), attempt coordinator-mediated hole
+    /// punching before falling back to TCP. Requires the coordinator to run the UDP engine
+    /// (it is the rendezvous). Works through cone-type NATs; symmetric NATs still defeat
+    /// punching, in which case the TCP fallback carries the traffic. Default true.
+    /// </summary>
+    public bool EnableNatPunch { get; set; } = true;
 }

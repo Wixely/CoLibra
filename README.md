@@ -224,6 +224,7 @@ await messenger.SendAsync(peer, "chat",      line);                             
 - **Keys ride the TLS mesh.** A per-link AES-256-GCM key pair (one per direction) is derived from the cluster secret + nonces exchanged over the existing TCP channel; every datagram is authenticated-encrypted with replay suppression. No certificates on the UDP path, nothing readable or spoofable on the wire.
 - **Compact headers.** The coordinator assigns each member a 2-byte wire id (visible as `ClusterMember.WireId`), channel names compress to 1 byte per link, and payloads travel raw: **15 bytes of header + 16-byte auth tag** instead of GUIDs and JSON. Wire ids are term-scoped, so coordinator failovers can't confuse identities — links just re-handshake.
 - **Automatic fallback.** No engine registered, peer without UDP, handshake failure, or payload over `MaxUdpPayloadBytes` (8 KiB default) → that message silently takes the TCP path. Mixed clusters (game server on UDP, tooling on TCP) just work.
+- **NAT hole punching, coordinator-mediated.** When two members sit behind NATs and the direct connect fails, the coordinator — which already holds authenticated TCP to both and runs a UDP socket — acts as the rendezvous: both sides send it an introduce request (opening their NAT mappings), it observes their public endpoints and punches them together, and the normal authenticated connect completes. On by default (`Messaging.EnableNatPunch`); it only runs after a failed direct connect. Honest limits: cone-type NATs punch fine, symmetric NATs don't (traffic then stays on the TCP fallback), and the coordinator must run the UDP engine to act as master.
 
 Try it: `dotnet run -- --Name alice --Udp true` in two [Chat sample](samples/CoLibra.Sample.Chat/) terminals — chat lines go ReliableOrdered while a `positions` channel streams 20 Hz Sequenced updates over the same link.
 
@@ -321,6 +322,7 @@ Held leases keep renewing under every policy — a node never silently stops wor
 | `NodeName` | null | App-defined name shown on `ClusterMember.Name`, addressable via `SendByNameAsync`. |
 | `Messaging.Enabled` / `.MaxPayloadBytes` / `.DeliveryTimeout` / `.UseDirectChannels` | `false` / 1 MiB / 5 s / `true` | Node-to-node messaging (see above). |
 | `Messaging.PreferUdp` / `.UdpPort` / `.LinkHandshakeTimeout` / `.MaxUdpPayloadBytes` | `false` / 0 (auto) / 2 s / 8 KiB | Resilient-UDP data plane (requires the CoLibra.Messaging.LiteNetLib package). |
+| `Messaging.EnableNatPunch` | `true` | Coordinator-mediated hole punching when direct UDP connects fail (cone NATs). |
 
 ## Networking notes
 

@@ -10,10 +10,11 @@ namespace CoLibra.Messaging.LiteNetLib;
 /// CoLibra core owns keys, framing and link semantics; this engine only moves opaque datagrams
 /// with the requested delivery guarantee.
 /// </summary>
-public sealed class LiteNetLibEngine : IUdpMessagingEngine, INetEventListener
+public sealed class LiteNetLibEngine : IUdpMessagingEngine, INatPunchCapable, INetEventListener
 {
     private readonly NetManager _manager;
     private UdpEngineCallbacks? _callbacks;
+    private NatPunchCallbacks? _punchCallbacks;
     private readonly ConcurrentDictionary<NetPeer, LiteNetLibPeer> _peers = new();
     private readonly ConcurrentDictionary<IPEndPoint, TaskCompletionSource<LiteNetLibPeer?>> _pendingConnects = new();
     private volatile bool _disposed;
@@ -39,6 +40,34 @@ public sealed class LiteNetLibEngine : IUdpMessagingEngine, INetEventListener
             _manager.SimulationPacketLossChance = value;
             _manager.SimulatePacketLoss = value > 0;
         }
+    }
+
+    /// <inheritdoc />
+    public void EnableNatPunch(NatPunchCallbacks callbacks)
+    {
+        ArgumentNullException.ThrowIfNull(callbacks);
+        _punchCallbacks = callbacks;
+        _manager.NatPunchEnabled = true;
+        _manager.NatPunchModule.Init(new PunchListener(this));
+        _manager.NatPunchModule.UnsyncedEvents = true;
+    }
+
+    /// <inheritdoc />
+    public void SendIntroduceRequest(IPEndPoint master, string token) =>
+        _manager.NatPunchModule.SendNatIntroduceRequest(master, token);
+
+    /// <inheritdoc />
+    public void Introduce(IPEndPoint hostInternal, IPEndPoint hostExternal,
+        IPEndPoint clientInternal, IPEndPoint clientExternal, string token) =>
+        _manager.NatPunchModule.NatIntroduce(hostInternal, hostExternal, clientInternal, clientExternal, token);
+
+    private sealed class PunchListener(LiteNetLibEngine engine) : INatPunchListener
+    {
+        public void OnNatIntroductionRequest(IPEndPoint localEndPoint, IPEndPoint remoteEndPoint, string token) =>
+            engine._punchCallbacks?.IntroductionRequested(localEndPoint, remoteEndPoint, token);
+
+        public void OnNatIntroductionSuccess(IPEndPoint targetEndPoint, NatAddressType type, string token) =>
+            engine._punchCallbacks?.IntroductionSucceeded(targetEndPoint, type == NatAddressType.Internal, token);
     }
 
     /// <inheritdoc />

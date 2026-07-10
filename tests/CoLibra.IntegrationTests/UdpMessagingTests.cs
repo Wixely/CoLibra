@@ -144,6 +144,56 @@ public class UdpMessagingTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.Equal(Enumerable.Range(0, Count), received.Order());
     }
 
+    /// <summary>Delegating engine whose FIRST direct connect fails, forcing the punch path.</summary>
+    private sealed class DirectConnectFailingEngine(LiteNetLibEngine inner) : IUdpMessagingEngine, INatPunchCapable
+    {
+        private int _connectAttempts;
+
+        public int ConnectAttempts => Volatile.Read(ref _connectAttempts);
+
+        public ValueTask<int> StartAsync(UdpEngineCallbacks callbacks, int port, CancellationToken ct) =>
+            inner.StartAsync(callbacks, port, ct);
+
+        public async ValueTask<IUdpPeer?> ConnectAsync(System.Net.IPEndPoint endpoint, string connectionKey, TimeSpan timeout, CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _connectAttempts) == 1)
+                return null; // simulate a NAT eating the direct connect
+            return await inner.ConnectAsync(endpoint, connectionKey, timeout, ct);
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+
+        public void EnableNatPunch(NatPunchCallbacks callbacks) => inner.EnableNatPunch(callbacks);
+
+        public void SendIntroduceRequest(System.Net.IPEndPoint master, string token) => inner.SendIntroduceRequest(master, token);
+
+        public void Introduce(System.Net.IPEndPoint hostInternal, System.Net.IPEndPoint hostExternal,
+            System.Net.IPEndPoint clientInternal, System.Net.IPEndPoint clientExternal, string token) =>
+            inner.Introduce(hostInternal, hostExternal, clientInternal, clientExternal, token);
+    }
+
+    [Fact]
+    public async Task Punches_through_when_the_direct_connect_fails()
+    {
+        var coordinator = await StartUdpNodeAsync("coord"); // runs the engine: the rendezvous master
+        var failingEngine = new DirectConnectFailingEngine(new LiteNetLibEngine());
+        var b = await _cluster.StartNodeAsync(WithUdp("b"), waitForCluster: true, failingEngine);
+        var c = await StartUdpNodeAsync("c");
+        var received = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = c.Messenger.RegisterHandler("game", (m, _) =>
+        {
+            received.TrySetResult(m);
+            return ValueTask.CompletedTask;
+        });
+
+        var result = await b.Messenger.SendAsync(c.LocalNodeId, "game", new byte[] { 5, 5 });
+
+        Assert.Equal(SendStatus.Delivered, result.Status);
+        Assert.Equal(new byte[] { 5, 5 }, (await received.Task.WaitAsync(TestCluster.Eventually)).Payload.ToArray());
+        Assert.True(await b.HasActiveUdpLinkAsync(c.LocalNodeId), "the punched connect should have activated the link");
+        Assert.True(failingEngine.ConnectAttempts >= 2, "the first (direct) connect must have failed and been retried via punch");
+    }
+
     [Fact]
     public async Task Links_reestablish_after_coordinator_failover()
     {

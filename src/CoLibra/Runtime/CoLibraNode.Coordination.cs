@@ -122,6 +122,14 @@ internal sealed partial class CoLibraNode
             case UdpLinkAcceptMessage m:
                 HandleUdpLinkAccept(peer, m);
                 break;
+
+            case UdpPunchRequestMessage m:
+                HandleUdpPunchRequest(peer, m);
+                break;
+
+            case UdpPunchInstructMessage m:
+                HandleUdpPunchInstruct(peer, m);
+                break;
         }
     }
 
@@ -810,6 +818,7 @@ internal sealed partial class CoLibraNode
 
         FlushCompletionSync(coordinator);
         TickPendingAssignments(coordinator, now);
+        TickPendingPunches(coordinator, now);
 
         if (coordinator.RebuildDeadlineTs > 0 && now >= coordinator.RebuildDeadlineTs)
         {
