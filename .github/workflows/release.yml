@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write # create the release and upload assets
+  packages: write # publish the NuGet packages to GitHub Packages
 
 jobs:
   release:
@@ -80,6 +81,14 @@ jobs:
           --title "CoLibra ${{ env.VERSION }}"
           --generate-notes
 
-      # To also publish to nuget.org: add a NUGET_API_KEY repository secret and uncomment.
+      - name: Publish to GitHub Packages
+        # Uses the built-in token — no external secret. --skip-duplicate makes re-runs idempotent.
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key ${{ github.token }}
+          --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          --skip-duplicate
+
+      # To ALSO publish to nuget.org: add a NUGET_API_KEY repository secret and uncomment.
       # - name: Push to NuGet.org
-      #   run: dotnet nuget push artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+      #   run: dotnet nuget push artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
