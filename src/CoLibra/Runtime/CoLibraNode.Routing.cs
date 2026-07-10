@@ -210,12 +210,12 @@ internal sealed partial class CoLibraNode : ICoLibraRouter
 
     private RouteAckStatus DeliverLocal(LeaseKey key, byte[] payload, NodeId origin)
     {
-        if (!_heldSnapshot.TryGetValue(key, out var token) || !IsHeldAndFresh(key))
+        if (!_heldSnapshot.TryGetValue(key, out var local) || !IsHeldAndFresh(key))
             return RouteAckStatus.NotOwner;
         if (!_routedHandlers.TryGetValue(key.Type, out var handler))
             return RouteAckStatus.NoHandler;
 
-        var delivery = new RoutedDelivery { Key = key, Payload = payload, Origin = origin, Token = token };
+        var delivery = new RoutedDelivery { Key = key, Payload = payload, Origin = origin, Token = local.Token };
         _ = Task.Run(async () =>
         {
             try

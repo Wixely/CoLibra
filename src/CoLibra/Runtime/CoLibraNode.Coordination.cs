@@ -762,6 +762,7 @@ internal sealed partial class CoLibraNode
         TickLocalLeaseExpiry();
         TickDirectChannels(now);
         TickUdpLinks();
+        TickIdleLeaseExpiry(now);
 
         if (_completions is not null && Since(_lastCompletionTrimTs) >= CompletionTrimInterval)
         {
@@ -772,6 +773,59 @@ internal sealed partial class CoLibraNode
 
     private static readonly TimeSpan CompletionTrimInterval = TimeSpan.FromSeconds(5);
     private long _lastCompletionTrimTs;
+    private long _lastIdleSweepTs;
+    private long _idleSweepIntervalTicks = -1;
+
+    /// <summary>
+    /// Drops held leases whose idle expiry lapsed (ids never checked again). Dropped keys
+    /// vanish from heartbeat renewals, so the coordinator's normal sweep frees them and
+    /// notifies the interested within one LeaseTtl; when this node IS the coordinator it
+    /// releases and notifies immediately.
+    /// </summary>
+    private void TickIdleLeaseExpiry(long now)
+    {
+        var sweepInterval = IdleSweepInterval();
+        if (sweepInterval == 0 || now - _lastIdleSweepTs < sweepInterval || _held.Count == 0)
+            return;
+        _lastIdleSweepTs = now;
+
+        List<LeaseKey>? expired = null;
+        foreach (var (key, local) in _held)
+        {
+            var deadline = Volatile.Read(ref local.IdleDeadlineTs);
+            if (deadline != 0 && now > deadline)
+                (expired ??= []).Add(key);
+        }
+
+        if (expired is null)
+            return;
+
+        foreach (var key in expired)
+        {
+            RemoveHeld(key, LeaseLossReason.IdleExpired);
+            if (_coordinator is { } coordinator && coordinator.Table.Release(LocalNodeId, key, out var interested))
+                NotifyAvailable(coordinator, [(key, interested)]);
+        }
+
+        _logger.LogInformation("Idle-expired {Count} untouched lease(s); {Remaining} still held",
+            expired.Count, _held.Count);
+    }
+
+    /// <summary>Sweep cadence scaled to the smallest configured idle expiry; 0 = feature fully off.</summary>
+    private long IdleSweepInterval()
+    {
+        if (_idleSweepIntervalTicks < 0)
+        {
+            var configured = _options.PerTypeLeaseIdleExpiry.Values.Append(_options.LeaseIdleExpiry)
+                .Where(e => e is not null).Select(e => e!.Value).ToList();
+            _idleSweepIntervalTicks = configured.Count == 0
+                ? 0
+                : Math.Max(ToTicks(TimeSpan.FromMilliseconds(250)),
+                    Math.Min(ToTicks(TimeSpan.FromSeconds(30)), ToTicks(configured.Min()) / 4));
+        }
+
+        return _idleSweepIntervalTicks;
+    }
 
     private void TickMember(long now)
     {

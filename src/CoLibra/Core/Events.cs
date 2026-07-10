@@ -24,6 +24,12 @@ public enum LeaseLossReason
 
     /// <summary>Revoked by <see cref="ICoLibraCluster.ForceRebalanceAsync"/> to shed excess load.</summary>
     Rebalanced = 3,
+
+    /// <summary>
+    /// The lease went unchecked past <see cref="CoLibraOptions.LeaseIdleExpiry"/> and aged out
+    /// (ownership checks slide the expiry; ids never seen again are reclaimed).
+    /// </summary>
+    IdleExpired = 4,
 }
 
 /// <summary>Outcome of <see cref="ICoLibraCluster.ForceRebalanceAsync"/>.</summary>

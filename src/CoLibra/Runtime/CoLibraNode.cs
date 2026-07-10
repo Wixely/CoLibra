@@ -38,8 +38,8 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
     // ---- lease state (held-lease writes only from the actor; reads from any thread) ----
     private readonly Dictionary<LeaseKey, LocalLease> _held = [];
-    private volatile ImmutableDictionary<LeaseKey, FencingToken> _heldSnapshot =
-        ImmutableDictionary<LeaseKey, FencingToken>.Empty;
+    private volatile ImmutableDictionary<LeaseKey, LocalLease> _heldSnapshot =
+        ImmutableDictionary<LeaseKey, LocalLease>.Empty;
     private long _lastAckTimestamp;
     private volatile bool _isCoordinatorRole;
     private volatile bool _acceptWork;
@@ -355,12 +355,38 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
     private bool IsHeldAndFresh(LeaseKey key)
     {
-        if (!_heldSnapshot.ContainsKey(key))
+        if (!_heldSnapshot.TryGetValue(key, out var local))
             return false;
+        TouchLease(local);
         if (_isCoordinatorRole)
             return true;
         var elapsed = _time.GetElapsedTime(Volatile.Read(ref _lastAckTimestamp));
         return elapsed < _options.LeaseTtl - _options.LeaseRenewSafetyMargin;
+    }
+
+    /// <summary>
+    /// The 50% sliding-renewal rule: an ownership check refreshes the idle expiry only once it
+    /// has fallen below half — one conditional volatile write on a stable object, so the hot
+    /// path stays lock-free and untouched checks cost a read and a compare.
+    /// </summary>
+    private void TouchLease(LocalLease local)
+    {
+        var deadline = Volatile.Read(ref local.IdleDeadlineTs);
+        if (deadline == 0)
+            return; // never expires
+
+        var now = _time.GetTimestamp();
+        if (now > deadline - local.IdleExpiryTicks / 2)
+            Volatile.Write(ref local.IdleDeadlineTs, now + local.IdleExpiryTicks);
+    }
+
+    /// <summary>Idle-expiry ticks for a lease type (per-type override, then global); 0 = never.</summary>
+    private long ResolveIdleExpiryTicks(string type)
+    {
+        var expiry = _options.PerTypeLeaseIdleExpiry.TryGetValue(type, out var perType)
+            ? perType
+            : _options.LeaseIdleExpiry;
+        return expiry is { } value ? ToTicks(value) : 0;
     }
 
     private void ThrowIfSplitBrainPolicyThrows()
@@ -477,16 +503,25 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
     private void AddHeld(LeaseKey key, FencingToken token)
     {
+        var idleTicks = ResolveIdleExpiryTicks(key.Type);
         if (_held.TryGetValue(key, out var existing))
         {
             existing.Token = token;
+            existing.IdleExpiryTicks = idleTicks;
+            Volatile.Write(ref existing.IdleDeadlineTs, idleTicks == 0 ? 0 : Now() + idleTicks);
         }
         else
         {
-            _held[key] = new LocalLease { Token = token, LostCts = new CancellationTokenSource() };
+            _held[key] = new LocalLease
+            {
+                Token = token,
+                LostCts = new CancellationTokenSource(),
+                IdleExpiryTicks = idleTicks,
+                IdleDeadlineTs = idleTicks == 0 ? 0 : Now() + idleTicks,
+            };
         }
 
-        _heldSnapshot = _held.ToImmutableDictionary(kv => kv.Key, kv => kv.Value.Token);
+        _heldSnapshot = _held.ToImmutableDictionary();
         Volatile.Write(ref _lastAckTimestamp, Now());
     }
 
@@ -495,7 +530,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         if (!_held.Remove(key, out var local))
             return;
 
-        _heldSnapshot = _held.ToImmutableDictionary(kv => kv.Key, kv => kv.Value.Token);
+        _heldSnapshot = _held.ToImmutableDictionary();
         local.LostCts.Cancel();
         local.LostCts.Dispose();
         if (lossReason is { } reason)
@@ -606,6 +641,15 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     {
         public required FencingToken Token;
         public required CancellationTokenSource LostCts;
+
+        /// <summary>Ticks of idle lifetime for this lease's type; 0 = never expires.</summary>
+        public long IdleExpiryTicks;
+
+        /// <summary>
+        /// Monotonic deadline after which the untouched lease ages out; 0 = never. Written by
+        /// the actor at grant and by ANY thread via the 50% touch rule (benign volatile races).
+        /// </summary>
+        public long IdleDeadlineTs;
     }
 
     private sealed record PendingAcquire(

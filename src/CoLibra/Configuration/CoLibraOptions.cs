@@ -78,6 +78,22 @@ public sealed class CoLibraOptions
     public TimeSpan LeaseTtl { get; set; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Idle lifetime of an UNTOUCHED lease on a healthy node (distinct from <see cref="LeaseTtl"/>,
+    /// which is crash detection). Ownership checks (<see cref="ICoLibraCluster.CanProcessAsync"/>,
+    /// handle reads, routed deliveries) slide the expiry forward once it falls below 50%, so
+    /// keys in active use live forever while ids that are never seen again age out — bounding
+    /// memory and heartbeat size. The owner raises <see cref="LeaseLossReason.IdleExpired"/> and
+    /// other nodes learn within one <see cref="LeaseTtl"/>. Null = never expire. Default 24 h.
+    /// </summary>
+    public TimeSpan? LeaseIdleExpiry { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Per-lease-type overrides of <see cref="LeaseIdleExpiry"/>. A type mapped to null never
+    /// expires — for permanent ids (e.g. a fixed set of source ids owned for the process's life).
+    /// </summary>
+    public Dictionary<string, TimeSpan?> PerTypeLeaseIdleExpiry { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Local safety margin: if renewals go unacknowledged for LeaseTtl minus this margin,
     /// <see cref="ICoLibraCluster.CanProcessAsync"/> flips to false locally before the coordinator
     /// could re-grant the key elsewhere. Default 3 s.

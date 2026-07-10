@@ -252,6 +252,22 @@ Every node keeps a full copy of the completion set (union-merged — completions
 - **Security**: TLS provides confidentiality; the shared secret provides authentication (mutual HMAC challenge-response inside the TLS channel). The self-signed certificate is auto-generated on first startup and stored at `<app dir>/colibra/<ServiceId>.pfx` — per-service, so multiple services on one machine never collide. Point `CertificatePath` elsewhere (or pre-provision your own PFX) if you prefer.
 - **Versioning**: nodes advertise their service version (defaults to the entry assembly's). `VersionCompatibility` controls who may cluster together: `MajorMatch` (default), `Strict`, `Minimum(version)` — handy for rolling deploys — or `Any`. Incompatible nodes simply form separate clusters. The wire protocol is versioned independently and incompatible protocol versions are always rejected at join.
 
+## Lease lifetime: crash TTL vs idle expiry
+
+Two independent clocks govern a lease:
+
+- **`LeaseTtl`** (15 s) is *crash detection*: an owner that stops heartbeating loses its keys within this window. It never expires leases on a healthy node.
+- **`LeaseIdleExpiry`** (default **24 h**) is *garbage collection for ids you never see again*: session ids, event ids, order ids. Every ownership check — `CanProcessAsync`, handle reads, routed deliveries — slides the expiry forward, but only once it has dropped below 50% (so hot-loop checks stay lock-free: one volatile read; the rare refresh is one volatile write). A lease you keep using lives forever; one you stop touching ages out, shrinking the owner's memory, the coordinator's table, *and* the per-second heartbeat payload that lists every held key.
+
+```csharp
+options.LeaseIdleExpiry = TimeSpan.FromHours(24);          // the default
+options.LeaseIdleExpiry = null;                            // never expire anything
+options.PerTypeLeaseIdleExpiry["sourceid"] = null;         // permanent ids: this type never expires
+options.PerTypeLeaseIdleExpiry["session"] = TimeSpan.FromHours(1);
+```
+
+When a lease idle-expires, the owner raises `LeaseLost` with reason `IdleExpired` (and any `IExclusiveLease.Lost` token fires); the key stops being renewed, so the coordinator frees it and push-notifies interested nodes within one `LeaseTtl`. Note that explicit handles from `TryAcquireAsync` are subject to idle expiry too if the app never checks them — give hold-forever types a per-type `null`. For work that *finishes*, `MarkCompletedAsync` remains the explicit tool (completed keys never come back; idle-expired keys can be re-acquired).
+
 ## Forcing a rebalance
 
 Steer-only balancing never revokes, so rare shapes can stay imbalanced (a node that acquired everything before its peers joined, work that never completes and releases). `ForceRebalanceAsync` is the explicit correction — the one sanctioned exception to steer-only:
@@ -326,6 +342,7 @@ Held leases keep renewing under every policy — a node never silently stops wor
 | `AnnounceInterval` / `HeartbeatInterval` | 2 s / 1 s | |
 | `MemberTimeout` / `ElectionTimeout` / `RebuildWindow` / `DiscoveryWindow` | 5 s / 3 s / 2 s / 3 s | |
 | `LeaseTtl` / `LeaseRenewSafetyMargin` | 15 s / 3 s | Owner death → keys reclaimable within ~`LeaseTtl`. |
+| `LeaseIdleExpiry` / `PerTypeLeaseIdleExpiry` | 24 h / empty | Untouched leases age out (see "Lease lifetime"); null = never expire. |
 | `SplitBrainPolicy` / `QuorumPolicy` | `DenyNewLeases` / `Majority` | |
 | `CoordinatorMode` | `Eligible` | `Forced` (this node IS the coordinator) / `Never` (member only) for asymmetric clusters. |
 | `AcceptWork` | `true` | Whether this node takes work leases; runtime-toggleable via `SetAcceptingWorkAsync`. |

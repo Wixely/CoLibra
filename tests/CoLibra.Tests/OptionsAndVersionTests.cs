@@ -119,6 +119,30 @@ public class CoLibraOptionsValidatorTests
     }
 
     [Fact]
+    public void Idle_expiry_accepts_defaults_null_and_sane_per_type()
+    {
+        var options = Valid(); // default 24 h
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Succeeded);
+
+        options.LeaseIdleExpiry = null; // never expire
+        options.PerTypeLeaseIdleExpiry["permanent"] = null;
+        options.PerTypeLeaseIdleExpiry["short"] = TimeSpan.FromMinutes(5);
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Idle_expiry_must_exceed_the_crash_ttl()
+    {
+        var options = Valid();
+        options.LeaseIdleExpiry = TimeSpan.FromSeconds(5); // < LeaseTtl (15 s)
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+
+        options.LeaseIdleExpiry = TimeSpan.FromHours(1);
+        options.PerTypeLeaseIdleExpiry["bad"] = TimeSpan.FromSeconds(1);
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Fact]
     public void Disabled_completion_tracking_skips_its_validation()
     {
         var options = Valid();

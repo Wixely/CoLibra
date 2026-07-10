@@ -47,6 +47,15 @@ internal sealed class CoLibraOptionsValidator : IValidateOptions<CoLibraOptions>
         if (options.LeaseRenewSafetyMargin <= TimeSpan.Zero || options.LeaseRenewSafetyMargin >= options.LeaseTtl)
             failures.Add("LeaseRenewSafetyMargin must be positive and smaller than LeaseTtl.");
 
+        if (options.LeaseIdleExpiry is { } idleExpiry && (idleExpiry < options.LeaseTtl || idleExpiry < 4 * options.HeartbeatInterval))
+            failures.Add("LeaseIdleExpiry must be at least LeaseTtl and 4x HeartbeatInterval (or null to never expire).");
+
+        foreach (var (type, expiry) in options.PerTypeLeaseIdleExpiry)
+        {
+            if (expiry is { } perType && (perType < options.LeaseTtl || perType < 4 * options.HeartbeatInterval))
+                failures.Add($"PerTypeLeaseIdleExpiry['{type}'] must be at least LeaseTtl and 4x HeartbeatInterval (or null to never expire).");
+        }
+
         if (options.Weight <= 0)
             failures.Add("Weight must be positive.");
 
