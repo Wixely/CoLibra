@@ -2,18 +2,6 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "build-primegrid",
-      "command": "dotnet",
-      "type": "process",
-      "args": [
-        "build",
-        "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/CoLibra.Sample.PrimeGrid.csproj",
-        "/property:GenerateFullPaths=true",
-        "/consoleloggerparameters:NoSummary;ForceNoAlign"
-      ],
-      "problemMatcher": "$msCompile"
-    },
-    {
       "label": "build-solution",
       "command": "dotnet",
       "type": "process",
@@ -23,19 +11,8 @@
         "/property:GenerateFullPaths=true",
         "/consoleloggerparameters:NoSummary;ForceNoAlign"
       ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
+      "group": { "kind": "build", "isDefault": true },
       "problemMatcher": "$msCompile"
-    },
-    {
-      "label": "stagger-node2",
-      "detail": "Lets node 1 build, start and claim coordinatorship before node 2 boots (same-machine discovery is most reliable with staggered starts).",
-      "command": "powershell",
-      "type": "process",
-      "args": ["-NoProfile", "-Command", "Start-Sleep", "8"],
-      "problemMatcher": []
     },
     {
       "label": "test-solution",
@@ -44,6 +21,22 @@
       "args": ["test", "${workspaceFolder}/CoLibra.slnx"],
       "group": "test",
       "problemMatcher": "$msCompile"
+    },
+
+    { "label": "build-worker",     "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.Worker/CoLibra.Sample.Worker.csproj",         "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+    { "label": "build-primegrid",  "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/CoLibra.Sample.PrimeGrid.csproj",   "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+    { "label": "build-router",     "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.Router/CoLibra.Sample.Router.csproj",         "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+    { "label": "build-chat",       "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.Chat/CoLibra.Sample.Chat.csproj",             "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+    { "label": "build-gameserver", "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.GameServer/CoLibra.Sample.GameServer.csproj", "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+    { "label": "build-maze",       "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.Maze/CoLibra.Sample.Maze.csproj",             "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+
+    {
+      "label": "stagger-second-node",
+      "detail": "Lets the first node build, start and claim coordinatorship before the next one boots (same-machine discovery is most reliable with staggered starts).",
+      "command": "powershell",
+      "type": "process",
+      "args": ["-NoProfile", "-Command", "Start-Sleep", "8"],
+      "problemMatcher": []
     }
   ]
 }

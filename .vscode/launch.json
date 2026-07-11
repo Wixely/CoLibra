@@ -1,48 +1,75 @@
 {
   "version": "0.2.0",
+  // Each demo has per-node configs plus a compound that launches the whole cluster at once.
+  // Pick a "* cluster" compound from the Run and Debug dropdown (Ctrl+Shift+D) and press F5.
+  // Interactive demos (Chat, Maze) each open their own integrated terminal — click into one
+  // to type. Only the FIRST node of each demo rebuilds; later nodes stagger to avoid the
+  // running node's file lock and to let the coordinator settle first.
   "configurations": [
-    {
-      "name": "PrimeGrid: node 1",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build-primegrid",
+    // ---------------- Worker: 8 sources split across instances ----------------
+    { "name": "Worker: node 1", "type": "coreclr", "request": "launch", "preLaunchTask": "build-worker",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Worker/bin/Debug/net10.0/CoLibra.Sample.Worker.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Worker", "console": "integratedTerminal" },
+    { "name": "Worker: node 2", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Worker/bin/Debug/net10.0/CoLibra.Sample.Worker.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Worker", "console": "integratedTerminal" },
+
+    // ---------------- PrimeGrid: distributed prime counting ----------------
+    { "name": "PrimeGrid: node 1", "type": "coreclr", "request": "launch", "preLaunchTask": "build-primegrid",
       "program": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/bin/Debug/net10.0/CoLibra.Sample.PrimeGrid.dll",
-      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid",
-      "args": [],
-      "console": "integratedTerminal",
-      "stopAtEntry": false
-    },
-    {
-      "name": "PrimeGrid: node 2",
-      "type": "coreclr",
-      "request": "launch",
-      // No build here: node 1's build already produced the binaries (rebuilding would hit
-      // the file lock of the running node 1). The stagger delay lets node 1 claim
-      // coordinatorship first, which is the most reliable same-machine startup order.
-      "preLaunchTask": "stagger-node2",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid", "console": "integratedTerminal" },
+    { "name": "PrimeGrid: node 2", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
       "program": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/bin/Debug/net10.0/CoLibra.Sample.PrimeGrid.dll",
-      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid",
-      "args": [],
-      "console": "integratedTerminal",
-      "stopAtEntry": false
-    },
-    {
-      "name": "PrimeGrid: quick run (100M, small buckets)",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build-primegrid",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid", "console": "integratedTerminal" },
+    { "name": "PrimeGrid: quick run (100M)", "type": "coreclr", "request": "launch", "preLaunchTask": "build-primegrid",
       "program": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid/bin/Debug/net10.0/CoLibra.Sample.PrimeGrid.dll",
-      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid",
-      "args": ["--Target", "100000000", "--RangeSize", "500000"],
-      "console": "integratedTerminal",
-      "stopAtEntry": false
-    }
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.PrimeGrid", "args": ["--Target", "100000000", "--RangeSize", "500000"],
+      "console": "integratedTerminal" },
+
+    // ---------------- Router: single-receiver routed delivery ----------------
+    { "name": "Router: node 1", "type": "coreclr", "request": "launch", "preLaunchTask": "build-router",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Router/bin/Debug/net10.0/CoLibra.Sample.Router.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Router", "console": "integratedTerminal" },
+    { "name": "Router: node 2", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Router/bin/Debug/net10.0/CoLibra.Sample.Router.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Router", "console": "integratedTerminal" },
+
+    // ---------------- Chat: node-to-node messaging (interactive) ----------------
+    { "name": "Chat: alice", "type": "coreclr", "request": "launch", "preLaunchTask": "build-chat",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Chat/bin/Debug/net10.0/CoLibra.Sample.Chat.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Chat", "args": ["--Name", "alice"], "console": "integratedTerminal" },
+    { "name": "Chat: bob", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Chat/bin/Debug/net10.0/CoLibra.Sample.Chat.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Chat", "args": ["--Name", "bob"], "console": "integratedTerminal" },
+    { "name": "Chat: alice (--Udp)", "type": "coreclr", "request": "launch", "preLaunchTask": "build-chat",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Chat/bin/Debug/net10.0/CoLibra.Sample.Chat.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Chat", "args": ["--Name", "alice", "--Udp", "true"], "console": "integratedTerminal" },
+
+    // ---------------- GameServer: forced coordinator + players ----------------
+    { "name": "GameServer: server", "type": "coreclr", "request": "launch", "preLaunchTask": "build-gameserver",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.GameServer/bin/Debug/net10.0/CoLibra.Sample.GameServer.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.GameServer", "args": ["--Server", "true"], "console": "integratedTerminal" },
+    { "name": "GameServer: player1", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.GameServer/bin/Debug/net10.0/CoLibra.Sample.GameServer.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.GameServer", "args": ["--Name", "player1"], "console": "integratedTerminal" },
+    { "name": "GameServer: player2", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.GameServer/bin/Debug/net10.0/CoLibra.Sample.GameServer.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.GameServer", "args": ["--Name", "player2"], "console": "integratedTerminal" },
+
+    // ---------------- Maze: multiplayer ASCII maze (interactive, truecolor) ----------------
+    { "name": "Maze: alice", "type": "coreclr", "request": "launch", "preLaunchTask": "build-maze",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Maze/bin/Debug/net10.0/CoLibra.Sample.Maze.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Maze", "args": ["--Name", "alice"], "console": "integratedTerminal" },
+    { "name": "Maze: bob", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.Maze/bin/Debug/net10.0/CoLibra.Sample.Maze.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Maze", "args": ["--Name", "bob"], "console": "integratedTerminal" }
   ],
   "compounds": [
-    {
-      "name": "PrimeGrid: 2-node cluster",
-      "configurations": ["PrimeGrid: node 1", "PrimeGrid: node 2"],
-      "stopAll": true
-    }
+    { "name": "Worker: 2-node cluster",     "configurations": ["Worker: node 1", "Worker: node 2"], "stopAll": true },
+    { "name": "PrimeGrid: 2-node cluster",  "configurations": ["PrimeGrid: node 1", "PrimeGrid: node 2"], "stopAll": true },
+    { "name": "Router: 2-node cluster",     "configurations": ["Router: node 1", "Router: node 2"], "stopAll": true },
+    { "name": "Chat: alice + bob",          "configurations": ["Chat: alice", "Chat: bob"], "stopAll": true },
+    { "name": "GameServer: server + 2 players", "configurations": ["GameServer: server", "GameServer: player1", "GameServer: player2"], "stopAll": true },
+    { "name": "Maze: alice + bob",          "configurations": ["Maze: alice", "Maze: bob"], "stopAll": true }
   ]
 }
