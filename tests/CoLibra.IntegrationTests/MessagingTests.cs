@@ -149,6 +149,44 @@ public class MessagingTests(ITestOutputHelper output) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Broadcast_reaches_every_node_except_the_sender()
+    {
+        var a = await _cluster.StartNodeAsync(WithMessaging("a"));
+        var b = await _cluster.StartNodeAsync(WithMessaging("b"));
+        var c = await _cluster.StartNodeAsync(WithMessaging("c"));
+        var hits = new ConcurrentBag<NodeId>();
+        var selfHit = false;
+        foreach (var node in new[] { b, c })
+        {
+            _ = node.Messenger.RegisterHandler<string>("news", (m, _) =>
+            {
+                Assert.Equal("hello all", m.Value);
+                hits.Add(node.LocalNodeId);
+                return ValueTask.CompletedTask;
+            });
+        }
+
+        _ = a.Messenger.RegisterHandler<string>("news", (_, _) => { selfHit = true; return ValueTask.CompletedTask; });
+        await TestCluster.WaitUntilAsync(() => a.Members.Count == 3);
+        var results = await a.Messenger.BroadcastAsync("news", "hello all");
+
+        Assert.Equal(2, results.Count); // b and c, not a
+        Assert.All(results, r => Assert.Equal(SendStatus.Delivered, r.Status));
+        await TestCluster.WaitUntilAsync(() => hits.Count == 2);
+        Assert.Contains(b.LocalNodeId, hits); // set comparison: Guid ordering is unrelated to start order
+        Assert.Contains(c.LocalNodeId, hits);
+        Assert.False(selfHit, "broadcast must not deliver to the sender");
+    }
+
+    [Fact]
+    public async Task Broadcast_from_a_lone_node_returns_empty()
+    {
+        var a = await _cluster.StartNodeAsync(WithMessaging("solo"));
+        var results = await a.Messenger.BroadcastAsync("news", new byte[] { 1 });
+        Assert.Empty(results);
+    }
+
+    [Fact]
     public async Task Messenger_throws_when_the_feature_is_disabled()
     {
         var a = await _cluster.StartNodeAsync();

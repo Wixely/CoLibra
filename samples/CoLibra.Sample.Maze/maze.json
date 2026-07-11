@@ -1,0 +1,7 @@
+{
+  // CoLibra.Sample.Maze settings. Command-line arguments override these (e.g. --Name alice).
+
+  // Your player name; also your color (hashed) and legend label.
+  // Default when unset: your OS username plus a random suffix.
+  //"Name": "alice"
+}

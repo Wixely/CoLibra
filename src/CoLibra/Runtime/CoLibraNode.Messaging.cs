@@ -148,6 +148,27 @@ internal sealed partial class CoLibraNode : ICoLibraMessenger
         ((ICoLibraMessenger)this).SendByNameAsync(
             name, channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), delivery, cancellationToken);
 
+    async ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.BroadcastAsync(
+        string channel, ReadOnlyMemory<byte> payload, MessageDelivery delivery, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(channel);
+        var targets = _members.Where(m => m.NodeId != LocalNodeId).Select(m => m.NodeId).ToList();
+        if (targets.Count == 0)
+            return [];
+
+        var sends = targets.Select(id => ((ICoLibraMessenger)this).SendAsync(id, channel, payload, delivery, cancellationToken).AsTask());
+        return await Task.WhenAll(sends).ConfigureAwait(false);
+    }
+
+    ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.BroadcastAsync(
+        string channel, byte[] payload, MessageDelivery delivery, CancellationToken cancellationToken) =>
+        ((ICoLibraMessenger)this).BroadcastAsync(channel, (ReadOnlyMemory<byte>)payload, delivery, cancellationToken);
+
+    ValueTask<IReadOnlyList<SendResult>> ICoLibraMessenger.BroadcastAsync<T>(
+        string channel, T value, MessageDelivery delivery, CancellationToken cancellationToken) =>
+        ((ICoLibraMessenger)this).BroadcastAsync(
+            channel, (ReadOnlyMemory<byte>)_options.Messaging.PayloadSerializer.Serialize(value), delivery, cancellationToken);
+
     private static bool IsAckedDelivery(MessageDelivery delivery) =>
         delivery is MessageDelivery.ReliableOrdered or MessageDelivery.Reliable;
 

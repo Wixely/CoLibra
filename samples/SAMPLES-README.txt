@@ -41,6 +41,14 @@ CoLibra.Sample.GameServer.exe           (gameserver.json)
     players (--Name player1). Watch zones split evenly, shift instantly when a
     late player joins, and migrate when one dies.
 
+CoLibra.Sample.Maze.exe                  (maze.json)
+    A multiplayer ASCII maze in 24-bit color. The first player generates the
+    map (elected by a lease); everyone who joins loads it over messaging and
+    spawns at a random spot. Move with WASD / arrows - you are '@', others are
+    colored dots - and every move is broadcast to all players. Needs a
+    truecolor terminal (Windows Terminal or similar). Run several with
+    --Name alice, --Name bob, ...
+
 All demos use hardcoded demo secrets - fine on a trusted LAN, change them in
 source for anything else. Windows Firewall: allow inbound UDP 41100 (discovery)
 and the mesh/UDP ports when prompted, or discovery stays one-directional.

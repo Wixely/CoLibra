@@ -46,6 +46,23 @@ public interface ICoLibraMessenger
     /// <summary>Typed <see cref="SendByNameAsync"/>.</summary>
     ValueTask<IReadOnlyList<SendResult>> SendByNameAsync<T>(string name, string channel, T value,
         MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends to every current member EXCEPT this node — the fan-out broadcast (one packet per
+    /// recipient; there is no shared-key multicast group). Returns one result per recipient;
+    /// empty when this is the only node. Pair with <see cref="MessageDelivery.Sequenced"/> for
+    /// high-rate game state where only the newest matters.
+    /// </summary>
+    ValueTask<IReadOnlyList<SendResult>> BroadcastAsync(string channel, ReadOnlyMemory<byte> payload,
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
+
+    /// <summary>Raw-bytes overload (keeps <c>byte[]</c> arguments off the generic serializer path).</summary>
+    ValueTask<IReadOnlyList<SendResult>> BroadcastAsync(string channel, byte[] payload,
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
+
+    /// <summary>Typed <see cref="BroadcastAsync(string, ReadOnlyMemory{byte}, MessageDelivery, CancellationToken)"/>.</summary>
+    ValueTask<IReadOnlyList<SendResult>> BroadcastAsync<T>(string channel, T value,
+        MessageDelivery delivery = MessageDelivery.ReliableOrdered, CancellationToken cancellationToken = default);
 }
 
 /// <summary>A message delivered to this node's channel handler.</summary>

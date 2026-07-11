@@ -199,7 +199,16 @@ await cluster.Messenger.SendAsync(member.NodeId, "chat", new ChatLine("hi", Date
 await cluster.Messenger.SendByNameAsync("bob", "chat", new ChatLine("hi bob", DateTimeOffset.UtcNow));
 ```
 
-Names are advertised through membership (no directory service), need not be unique — `SendByNameAsync` returns one acknowledged result per match — and raw-byte overloads skip serialization just like routing. Sends are acknowledged (`Delivered` / `NoHandler` / `UnknownTarget` / `Timeout`) with at-least-once semantics, and payloads travel over the same encrypted paths as routed delivery: pooled direct member↔member channels with coordinator relay as fallback. Broadcast is deliberately just a loop over `Members` — see the [Chat sample](samples/CoLibra.Sample.Chat/) for a working terminal chat (`dotnet run -- --Name alice`).
+Names are advertised through membership (no directory service), need not be unique — `SendByNameAsync` returns one acknowledged result per match — and raw-byte overloads skip serialization just like routing. Sends are acknowledged (`Delivered` / `NoHandler` / `UnknownTarget` / `Timeout`) with at-least-once semantics, and payloads travel over the same encrypted paths as routed delivery: pooled direct member↔member channels with coordinator relay as fallback.
+
+To reach the whole cluster, `BroadcastAsync` fans out to every member except the sender (one packet per recipient — there's no shared-key multicast group), returning one result per recipient:
+
+```csharp
+// game-state broadcast: Sequenced = latest-wins, no retransmit of stale frames
+await cluster.Messenger.BroadcastAsync("world-state", snapshot, MessageDelivery.Sequenced);
+```
+
+See the [Chat sample](samples/CoLibra.Sample.Chat/) for a terminal chat (`dotnet run -- --Name alice`), and the [Maze sample](samples/CoLibra.Sample.Maze/) for a multiplayer ASCII maze in 24-bit color that shows the whole toolkit together: lease-elected map authoring, map distribution over messaging, and broadcast position updates.
 
 ## UDP messaging for game servers (opt-in)
 
