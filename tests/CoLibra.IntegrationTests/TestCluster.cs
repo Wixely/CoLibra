@@ -17,9 +17,10 @@ internal sealed class TestCluster(ITestOutputHelper? output = null) : IAsyncDisp
     private readonly Dictionary<CoLibraNode, IPEndPoint> _endpoints = [];
     private readonly List<CoLibraNode> _nodes = [];
 
-    // CI runners (2 cores, both test assemblies in parallel) stall long enough to trip the
-    // aggressive local timings, killing perfectly healthy nodes. Scale up under CI.
-    public static readonly int Scale = Environment.GetEnvironmentVariable("CI") is null ? 1 : 3;
+    // CI runners (2 cores) stall the real-time cluster timers long enough to trip the aggressive
+    // local timings, killing perfectly healthy nodes. A generous 5x under CI gives timeouts
+    // enough headroom to absorb thread-pool starvation and eliminate the rare load flake.
+    public static readonly int Scale = Environment.GetEnvironmentVariable("CI") is null ? 1 : 5;
 
     public static readonly TimeSpan Eventually = TimeSpan.FromSeconds(15 * Scale);
 
