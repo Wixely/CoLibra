@@ -29,6 +29,7 @@
     { "label": "build-chat",       "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.Chat/CoLibra.Sample.Chat.csproj",             "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
     { "label": "build-gameserver", "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.GameServer/CoLibra.Sample.GameServer.csproj", "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
     { "label": "build-maze",       "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.Maze/CoLibra.Sample.Maze.csproj",             "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
+    { "label": "build-hostedmaze", "command": "dotnet", "type": "process", "args": ["build", "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze/CoLibra.Sample.HostedMaze.csproj", "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary;ForceNoAlign"], "problemMatcher": "$msCompile" },
 
     {
       "label": "stagger-second-node",

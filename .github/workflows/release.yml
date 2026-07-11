@@ -58,7 +58,7 @@ jobs:
         run: |
           # One self-sufficient .exe per demo (all managed deps bundled inside; needs only the
           # .NET 10 runtime), plus each sample's named editable config beside it.
-          for sample in Worker PrimeGrid Router Chat GameServer Maze; do
+          for sample in Worker PrimeGrid Router Chat GameServer Maze HostedMaze; do
             dotnet publish "samples/CoLibra.Sample.$sample/CoLibra.Sample.$sample.csproj" \
               --configuration Release -p:Version=${{ env.VERSION }} \
               --runtime win-x64 --self-contained false \

@@ -1,0 +1,6 @@
+{
+  // CoLibra.Sample.HostedMaze settings. Command-line arguments override these (e.g. --Name alice).
+
+  // Your player name; also your color and legend label.
+  //"Name": "alice"
+}

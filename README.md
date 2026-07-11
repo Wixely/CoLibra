@@ -208,7 +208,7 @@ To reach the whole cluster, `BroadcastAsync` fans out to every member except the
 await cluster.Messenger.BroadcastAsync("world-state", snapshot, MessageDelivery.Sequenced);
 ```
 
-See the [Chat sample](samples/CoLibra.Sample.Chat/) for a terminal chat (`dotnet run -- --Name alice`), and the [Maze sample](samples/CoLibra.Sample.Maze/) for a multiplayer ASCII maze in 24-bit color that shows the whole toolkit together: lease-elected map authoring, map distribution over messaging, and broadcast position updates.
+See the [Chat sample](samples/CoLibra.Sample.Chat/) for a terminal chat (`dotnet run -- --Name alice`), the [Maze sample](samples/CoLibra.Sample.Maze/) for a multiplayer ASCII maze in 24-bit color (lease-elected map authoring, map distribution over messaging, broadcast position updates), and the [HostedMaze sample](samples/CoLibra.Sample.HostedMaze/) where the game *is* the server — the coordinator is the authoritative host, and killing it migrates the host to another player seamlessly (CoLibra's coordinator failover as host migration; the new host already holds the last broadcast snapshot, so no state is lost).
 
 ## UDP messaging for game servers (opt-in)
 

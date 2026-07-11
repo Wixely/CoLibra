@@ -49,6 +49,14 @@ CoLibra.Sample.Maze.exe                  (maze.json)
     truecolor terminal (Windows Terminal or similar). Run several with
     --Name alice, --Name bob, ...
 
+CoLibra.Sample.HostedMaze.exe            (hostedmaze.json)
+    The same maze, but the game IS the server: the current CoLibra coordinator
+    is the authoritative host (crown), owns all state, and broadcasts it. Kill
+    whichever instance is the host and the crown migrates to another player
+    within a second or two - no lost state, nobody dropped - because CoLibra
+    elects a new coordinator and every client already holds the last snapshot.
+    Run 3+ (--Name alice, bob, carol) so there's always a successor.
+
 All demos use hardcoded demo secrets - fine on a trusted LAN, change them in
 source for anything else. Windows Firewall: allow inbound UDP 41100 (discovery)
 and the mesh/UDP ports when prompted, or discovery stays one-directional.

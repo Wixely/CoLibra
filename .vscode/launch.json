@@ -62,7 +62,18 @@
       "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Maze", "args": ["--Name", "alice"], "console": "integratedTerminal" },
     { "name": "Maze: bob", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
       "program": "${workspaceFolder}/samples/CoLibra.Sample.Maze/bin/Debug/net10.0/CoLibra.Sample.Maze.dll",
-      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Maze", "args": ["--Name", "bob"], "console": "integratedTerminal" }
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.Maze", "args": ["--Name", "bob"], "console": "integratedTerminal" },
+
+    // ---------------- HostedMaze: the game IS the server, with host migration ----------------
+    { "name": "HostedMaze: alice", "type": "coreclr", "request": "launch", "preLaunchTask": "build-hostedmaze",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze/bin/Debug/net10.0/CoLibra.Sample.HostedMaze.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze", "args": ["--Name", "alice"], "console": "integratedTerminal" },
+    { "name": "HostedMaze: bob", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze/bin/Debug/net10.0/CoLibra.Sample.HostedMaze.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze", "args": ["--Name", "bob"], "console": "integratedTerminal" },
+    { "name": "HostedMaze: carol", "type": "coreclr", "request": "launch", "preLaunchTask": "stagger-second-node",
+      "program": "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze/bin/Debug/net10.0/CoLibra.Sample.HostedMaze.dll",
+      "cwd": "${workspaceFolder}/samples/CoLibra.Sample.HostedMaze", "args": ["--Name", "carol"], "console": "integratedTerminal" }
   ],
   "compounds": [
     { "name": "Worker: 2-node cluster",     "configurations": ["Worker: node 1", "Worker: node 2"], "stopAll": true },
@@ -70,6 +81,7 @@
     { "name": "Router: 2-node cluster",     "configurations": ["Router: node 1", "Router: node 2"], "stopAll": true },
     { "name": "Chat: alice + bob",          "configurations": ["Chat: alice", "Chat: bob"], "stopAll": true },
     { "name": "GameServer: server + 2 players", "configurations": ["GameServer: server", "GameServer: player1", "GameServer: player2"], "stopAll": true },
-    { "name": "Maze: alice + bob",          "configurations": ["Maze: alice", "Maze: bob"], "stopAll": true }
+    { "name": "Maze: alice + bob",          "configurations": ["Maze: alice", "Maze: bob"], "stopAll": true },
+    { "name": "HostedMaze: 3-player arena", "configurations": ["HostedMaze: alice", "HostedMaze: bob", "HostedMaze: carol"], "stopAll": true }
   ]
 }
