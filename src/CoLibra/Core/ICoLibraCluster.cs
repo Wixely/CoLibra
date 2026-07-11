@@ -97,6 +97,17 @@ public interface ICoLibraCluster
     /// <summary>Completes once the node has joined a cluster or become its coordinator.</summary>
     Task WaitForClusterAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Captures a consistent, read-only <see cref="DiagnosticsSnapshot"/> of what this node
+    /// currently knows: its identity and lifecycle state, the members it sees, who the coordinator
+    /// is, work in flight (held leases, completions, pending acquires), coordinator-side lease
+    /// distribution when this node is the coordinator, transport/link stats, and the non-secret
+    /// configuration it is running with. The snapshot is read on the internal actor so all counts
+    /// are mutually consistent; the shared secret and key material are never included. Intended for
+    /// logging, health endpoints and dashboards — cheap enough to call periodically.
+    /// </summary>
+    ValueTask<DiagnosticsSnapshot> GetDiagnosticsAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Raised when this node loses ownership of a lease.</summary>
     event EventHandler<LeaseLostEventArgs>? LeaseLost;
 

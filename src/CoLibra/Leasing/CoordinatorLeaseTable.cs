@@ -85,6 +85,9 @@ internal sealed class CoordinatorLeaseTable
 
     public int LeaseCount => _leases.Count;
 
+    /// <summary>Number of member nodes currently draining (not accepting new leases) — diagnostics.</summary>
+    public int NotAcceptingCount => _notAccepting.Count;
+
     public void NodeUp(NodeId node, double weight, bool acceptsWork = true)
     {
         _nodeWeights[node] = weight;

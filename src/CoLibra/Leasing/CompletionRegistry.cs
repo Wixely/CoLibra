@@ -54,6 +54,28 @@ internal sealed class CompletionRegistry(CompletionTrackingOptions options, Time
         return added;
     }
 
+    /// <summary>Total number of completed ids across all types (diagnostics).</summary>
+    public int Count
+    {
+        get
+        {
+            lock (_lock)
+            {
+                var total = 0;
+                foreach (var set in _byType.Values)
+                    total += set.Ids.Count;
+                return total;
+            }
+        }
+    }
+
+    /// <summary>Per-type completed-id counts (diagnostics).</summary>
+    public Dictionary<string, int> CountsByType()
+    {
+        lock (_lock)
+            return _byType.ToDictionary(kv => kv.Key, kv => kv.Value.Ids.Count, StringComparer.Ordinal);
+    }
+
     public List<LeaseKey> Snapshot()
     {
         lock (_lock)

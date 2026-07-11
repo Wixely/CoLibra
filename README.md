@@ -335,6 +335,36 @@ options.SplitBrainPolicy = SplitBrainPolicy.DenyNewLeases;      // default: exis
 
 Held leases keep renewing under every policy — a node never silently stops work it already owns unless it genuinely loses the lease.
 
+## Diagnostics
+
+One call gives your service a consistent, read-only picture of what a node currently knows — for logs, a health endpoint or a dashboard:
+
+```csharp
+DiagnosticsSnapshot d = await cluster.GetDiagnosticsAsync();
+
+Console.WriteLine($"{d.NodeName} [{d.State}] term {d.Term}, sees {d.MemberCount} members");
+Console.WriteLine($"coordinator: {d.CoordinatorName ?? "(electing)"} — holding {d.HeldLeaseCount} leases");
+
+foreach (var m in d.Members)
+    Console.WriteLine($"  {(m.IsSelf ? "*" : " ")} {m.Name,-10} {m.NodeId} {(m.IsCoordinator ? "👑" : "")} {(m.AcceptsWork ? "" : "(draining)")}");
+
+// Coordinator-only: the authoritative lease distribution across the cluster
+if (d.AsCoordinator is { } c)
+    Console.WriteLine($"tracking {c.TrackedLeaseCount} leases across {c.SessionCount} sessions: "
+        + string.Join(", ", c.LeasesByTypePerNode.Select(t => $"{t.Key}={t.Value.Values.Sum()}")));
+```
+
+The snapshot is captured on the node's internal actor, so every count is mutually consistent (not a smear across concurrent updates). It contains:
+
+- **Identity & lifecycle** — `LocalNodeId`, `NodeName`, `ServiceId`, `ServiceVersion`, `State`, `IsCoordinator`, `IsAcceptingWork`, `Incarnation`, `Term`.
+- **Cluster view** — `CoordinatorId` / `CoordinatorName`, `MemberCount`, and a `Members` list (each with name, endpoint, `IsSelf`, `IsCoordinator`, `AcceptsWork`, weight, wire id, incarnation).
+- **Work / progress** — `HeldLeaseCount` and `HeldLeasesByType`, `PendingAcquireCount`, `DeniedDecisionCacheCount`, and (when completion tracking is on) `CompletedCount` / `CompletedByType`.
+- **`AsCoordinator`** (null unless this node is the coordinator) — `TrackedLeaseCount`, `SessionCount`, `NotAcceptingNodeCount`, and `LeasesByTypePerNode` (type → node → count) so you can see cluster balance at a glance.
+- **`Transport`** — messaging/routing enabled flags, handler counts, active UDP links, pooled direct channels, owner-cache size.
+- **`Configuration`** — the timings, policies and networking settings this node is running with.
+
+It's a plain record, so `JsonSerializer.Serialize(d)` gives you a health-endpoint payload directly. The shared secret and all key material are structurally absent — there is no field that can leak them.
+
 ## Configuration reference
 
 | Option | Default | Notes |

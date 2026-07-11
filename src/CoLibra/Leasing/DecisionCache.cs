@@ -47,6 +47,9 @@ internal sealed class DecisionCache(bool enabled, TimeSpan ttl, int maxEntries, 
 
     public void Clear() => _deniedUntil.Clear();
 
+    /// <summary>Number of currently cached negative decisions (diagnostics).</summary>
+    public int Count => _deniedUntil.Count;
+
     private void Trim()
     {
         // Rare path (cache overfull): drop the entries closest to expiry.
