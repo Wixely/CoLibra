@@ -8,7 +8,7 @@ namespace CoLibra.Sample.HostedMaze;
 internal sealed record Join(string Name);
 internal sealed record Move(string Name, int Dx, int Dy);
 internal sealed record PlayerPos(string Name, int X, int Y);
-internal sealed record Snapshot(int Width, int Height, string Cells, IReadOnlyList<PlayerPos> Players);
+internal sealed record Snapshot(int Width, int Height, string Cells, IReadOnlyList<PlayerPos> Players, IReadOnlyList<string> Away);
 
 /// <summary>
 /// A maze where the CoLibra COORDINATOR is the authoritative game host: it owns the maze and
@@ -28,8 +28,14 @@ internal sealed class HostedMazeGame(
     private const int Rows = 11;
     private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(140);
 
+    // A player who leaves is kept here for GraceMs so they can reconnect (same --Name) and
+    // resume their exact position; only after the grace window are they cleared. Stable-name
+    // identity + the host's authoritative state = seamless reconnect.
+    private const long GraceMs = 20_000;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<string, PlayerPos> _positions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _awaySince = new(StringComparer.Ordinal); // name -> TickCount64 when they left
     private readonly Random _random = new();
     private Maze? _maze;
     private volatile bool _dirty = true;
@@ -47,14 +53,7 @@ internal sealed class HostedMazeGame(
         cluster.MembershipChanged += (_, e) =>
         {
             if (IsHost)
-            {
-                lock (_gate)
-                {
-                    foreach (var left in e.Left)
-                        _positions.Remove(NameForLeft(e, left));
-                }
-            }
-
+                ReconcilePresence(e.Members); // a name that dropped from membership goes "away", not gone
             _dirty = true;
         };
 
@@ -65,7 +64,7 @@ internal sealed class HostedMazeGame(
         await using var joins = cluster.Messenger.RegisterHandler<Join>("join", (m, _) =>
         {
             if (IsHost)
-                EnsureSpawned(m.Value.Name);
+                HostPlayerJoined(m.Value.Name); // resumes if they still have a saved position, else spawns fresh
             return ValueTask.CompletedTask;
         });
         await using var moves = cluster.Messenger.RegisterHandler<Move>("move", (m, _) =>
@@ -98,9 +97,6 @@ internal sealed class HostedMazeGame(
             render.ContinueWith(_ => { }, CancellationToken.None));
     }
 
-    private static string NameForLeft(MembershipChangedEventArgs e, NodeId left) =>
-        e.Members.FirstOrDefault(m => m.NodeId == left)?.Name ?? left.ToString();
-
     // =====================================================================================
     // Host: owns the maze + positions, broadcasts the full snapshot each tick.
     // =====================================================================================
@@ -114,7 +110,52 @@ internal sealed class HostedMazeGame(
             EnsureSpawnedLocked(settings.Name);
         }
 
+        // A freshly-elected host inherited positions via the last snapshot; mark anyone not
+        // currently a member as "away" (they may have died along with the old host) so the
+        // grace window applies uniformly.
+        ReconcilePresence(cluster.Members);
         logger.LogInformation("You are now the HOST (authoritative game server)");
+    }
+
+    /// <summary>Names in the member list are present; names in our state but not in membership are "away".</summary>
+    private void ReconcilePresence(IReadOnlyList<ClusterMember> members)
+    {
+        var present = members.Select(m => m.Name).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        present.Add(settings.Name); // we are always present to ourselves — never mark the host away
+        List<string> departed = [], returned = [];
+        lock (_gate)
+        {
+            foreach (var name in _positions.Keys)
+            {
+                if (present.Contains(name))
+                {
+                    if (_awaySince.Remove(name))     // was away, now back — resumes their saved position
+                        returned.Add(name);
+                }
+                else if (!_awaySince.ContainsKey(name))
+                {
+                    _awaySince[name] = Environment.TickCount64; // just left — start the grace clock
+                    departed.Add(name);
+                }
+            }
+        }
+
+        foreach (var name in departed)
+            logger.LogInformation("'{Name}' disconnected — holding their spot for {Grace}s", name, GraceMs / 1000);
+        foreach (var name in returned)
+            logger.LogInformation("'{Name}' reconnected — resumed their saved position", name);
+        _dirty = true;
+    }
+
+    private void HostPlayerJoined(string name)
+    {
+        lock (_gate)
+        {
+            _awaySince.Remove(name);      // reconnecting clears the away marker...
+            EnsureSpawnedLocked(name);    // ...and only spawns if they have no saved position (else resume)
+        }
+
+        _dirty = true;
     }
 
     private async Task HostLoopAsync(CancellationToken ct)
@@ -128,13 +169,26 @@ internal sealed class HostedMazeGame(
                     continue;
 
                 Snapshot snapshot;
+                List<string> expired = [];
                 lock (_gate)
                 {
                     if (_maze is not { } maze)
                         continue;
-                    snapshot = new Snapshot(maze.Width, maze.Height, maze.Cells, [.. _positions.Values]);
+
+                    // Clear players who have been away past the grace window.
+                    var now = Environment.TickCount64;
+                    foreach (var (name, since) in _awaySince.Where(kv => now - kv.Value > GraceMs).ToList())
+                    {
+                        _awaySince.Remove(name);
+                        _positions.Remove(name);
+                        expired.Add(name);
+                    }
+
+                    snapshot = new Snapshot(maze.Width, maze.Height, maze.Cells, [.. _positions.Values], [.. _awaySince.Keys]);
                 }
 
+                foreach (var name in expired)
+                    logger.LogInformation("'{Name}' did not return within {Grace}s — removed from the maze", name, GraceMs / 1000);
                 _dirty = true; // the host renders from its own authoritative state
                 await cluster.Messenger.BroadcastAsync("snapshot", snapshot, MessageDelivery.Sequenced, ct);
             }
@@ -187,6 +241,9 @@ internal sealed class HostedMazeGame(
             _positions.Clear();
             foreach (var p in snapshot.Players)
                 _positions[p.Name] = p;
+            _awaySince.Clear();
+            foreach (var name in snapshot.Away)
+                _awaySince[name] = 0; // clients don't sweep; they just render the host's away set
         }
 
         _dirty = true;
@@ -341,10 +398,12 @@ internal sealed class HostedMazeGame(
     {
         Maze? maze;
         List<PlayerPos> players;
+        HashSet<string> away;
         lock (_gate)
         {
             maze = _maze;
             players = [.. _positions.Values];
+            away = [.. _awaySince.Keys];
         }
 
         if (maze is null)
@@ -368,7 +427,14 @@ internal sealed class HostedMazeGame(
                     var (r, g, b) = Ansi.PlayerColor(who.Name);
                     var isHost = who.Name == hostName;
                     var self = who.Name == settings.Name;
-                    sb.Append(Ansi.Fg(r, g, b)).Append(isHost ? '♔' : self ? '@' : '●');
+                    if (away.Contains(who.Name))
+                    {
+                        sb.Append(Ansi.Fg((byte)(r / 4), (byte)(g / 4), (byte)(b / 4))).Append('○'); // dimmed hollow = disconnected
+                    }
+                    else
+                    {
+                        sb.Append(Ansi.Fg(r, g, b)).Append(isHost ? '♔' : self ? '@' : '●');
+                    }
                 }
                 else if (maze.IsWall(x, y))
                 {
@@ -388,8 +454,9 @@ internal sealed class HostedMazeGame(
         foreach (var p in players.OrderBy(p => p.Name, StringComparer.Ordinal))
         {
             var (r, g, b) = Ansi.PlayerColor(p.Name);
-            var marker = p.Name == hostName ? "♔ " : p.Name == settings.Name ? "@ " : "● ";
-            sb.Append(Ansi.Fg(r, g, b)).Append(marker).Append(p.Name).Append(Ansi.Reset).Append("  ");
+            var isAway = away.Contains(p.Name);
+            var marker = isAway ? "○ " : p.Name == hostName ? "♔ " : p.Name == settings.Name ? "@ " : "● ";
+            sb.Append(Ansi.Fg(r, g, b)).Append(marker).Append(p.Name).Append(isAway ? " (away)" : "").Append(Ansi.Reset).Append("  ");
         }
 
         sb.Append(Ansi.Reset).Append('\n');
