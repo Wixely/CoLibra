@@ -44,8 +44,10 @@ internal sealed class CoLibraOptionsValidator : IValidateOptions<CoLibraOptions>
         if (options.LeaseTtl <= options.HeartbeatInterval * 2)
             failures.Add("LeaseTtl must be at least twice HeartbeatInterval.");
 
-        if (options.LeaseRenewSafetyMargin <= TimeSpan.Zero || options.LeaseRenewSafetyMargin >= options.LeaseTtl)
-            failures.Add("LeaseRenewSafetyMargin must be positive and smaller than LeaseTtl.");
+        if (options.LeaseRenewSafetyMargin < options.HeartbeatInterval || options.LeaseRenewSafetyMargin >= options.LeaseTtl)
+            failures.Add("LeaseRenewSafetyMargin must be at least HeartbeatInterval and smaller than LeaseTtl: a member " +
+                "stops trusting its leases at LeaseTtl minus this margin and must do so at least a heartbeat before the " +
+                "coordinator reclaims them at the TTL deadline, so two nodes never own the same key.");
 
         if (options.LeaseIdleExpiry is { } idleExpiry && (idleExpiry < options.LeaseTtl || idleExpiry < 4 * options.HeartbeatInterval))
             failures.Add("LeaseIdleExpiry must be at least LeaseTtl and 4x HeartbeatInterval (or null to never expire).");

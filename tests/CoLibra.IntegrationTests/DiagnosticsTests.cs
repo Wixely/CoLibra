@@ -68,9 +68,33 @@ public class DiagnosticsTests : IAsyncLifetime
         Assert.Equal(3, onCoord.AsCoordinator!.TrackedLeaseCount);
         Assert.Equal(1, onCoord.AsCoordinator.SessionCount); // one member session (the worker)
 
-        var workerHex = worker.LocalNodeId.ToString();
-        Assert.Equal(2, onCoord.AsCoordinator.LeasesByTypePerNode["orders"][workerHex]);
-        Assert.Equal(1, onCoord.AsCoordinator.LeasesByTypePerNode["invoices"][workerHex]);
+        var workerId = worker.LocalNodeId.Value.ToString(); // full id — the map keys by full id, not the 8-char prefix
+        Assert.Equal(2, onCoord.AsCoordinator.LeasesByTypePerNode["orders"][workerId]);
+        Assert.Equal(1, onCoord.AsCoordinator.LeasesByTypePerNode["invoices"][workerId]);
+    }
+
+    [Fact]
+    public async Task Coordinator_diagnostics_handle_nodes_with_colliding_id_prefixes()
+    {
+        // NodeId.ToString() is only an 8-char prefix; these two ids share it (as any two nodes
+        // started in the same ~65s window do, GUID v7 timestamp bits). The per-node lease map
+        // must key by the FULL id, or building it throws a duplicate-key ArgumentException.
+        var a = Guid.Parse("12345678-0000-0000-0000-000000000001");
+        var b = Guid.Parse("12345678-0000-0000-0000-000000000002");
+        var coord = await _cluster.StartNodeAsync(o => o.NodeId = a);
+        var worker = await _cluster.StartNodeAsync(o => o.NodeId = b);
+
+        await TestCluster.WaitUntilAsync(() => coord.Members.Count == 2 && worker.Members.Count == 2);
+
+        // Both nodes hold a lease of the SAME type, so both land under that type's per-node map.
+        Assert.True(await coord.CanProcessAsync("orders", "C"));
+        Assert.True(await worker.CanProcessAsync("orders", "W"));
+
+        var diag = await coord.GetDiagnosticsAsync(); // must not throw on the prefix collision
+        Assert.NotNull(diag.AsCoordinator);
+        Assert.Equal(2, diag.AsCoordinator!.LeasesByTypePerNode["orders"].Count);
+        Assert.Contains(a.ToString(), diag.AsCoordinator.LeasesByTypePerNode["orders"].Keys);
+        Assert.Contains(b.ToString(), diag.AsCoordinator.LeasesByTypePerNode["orders"].Keys);
     }
 
     [Fact]

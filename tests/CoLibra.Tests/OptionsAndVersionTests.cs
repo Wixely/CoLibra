@@ -82,6 +82,17 @@ public class CoLibraOptionsValidatorTests
     }
 
     [Fact]
+    public void Rejects_safety_margin_below_a_heartbeat()
+    {
+        // The self-fence lead must be at least a heartbeat, or a partitioned member could still
+        // trust a lease the coordinator has already reclaimed (dual ownership).
+        var options = Valid();
+        options.HeartbeatInterval = TimeSpan.FromSeconds(2);
+        options.LeaseRenewSafetyMargin = TimeSpan.FromSeconds(1);
+        Assert.True(new CoLibraOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Fact]
     public void Certificate_path_defaults_next_to_the_service()
     {
         var options = Valid();

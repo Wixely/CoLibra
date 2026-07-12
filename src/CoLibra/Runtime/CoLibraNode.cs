@@ -126,7 +126,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         if (_stopping.IsCancellationRequested)
             return;
 
-        var stopped = PostWithResult<bool>(tcs =>
+        var stopped = PostWithResult<bool>(async tcs =>
         {
             SetState(ClusterState.Stopped);
             FailAllPending(LeaseDenialReason.NoCoordinator);
@@ -138,10 +138,16 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
             foreach (var pooled in _directChannels.Values)
                 _ = pooled.Channel.DisposeAsync();
             _directChannels.Clear();
+
+            // Tell the coordinator we are leaving cleanly so it reclaims our leases at once instead
+            // of holding them to their TTL (which it must do for a silent partition or crash). Best
+            // effort — a dead link just means we fall back to the timeout path.
+            if (_member is { Connection: { } coordinatorChannel })
+                await SendSafeAsync(coordinatorChannel, new LeaveNoticeMessage(LocalNodeId.Value)).ConfigureAwait(false);
+
             _member?.Dispose();
             _coordinator?.DisposeAllSessions();
             tcs.TrySetResult(true);
-            return ValueTask.CompletedTask;
         });
         try
         {
@@ -552,7 +558,19 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     private Task<T> PostWithResult<T>(Func<TaskCompletionSource<T>, ValueTask> action)
     {
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_actions.Writer.TryWrite(() => action(tcs)))
+        // Fault the result if the action throws instead of leaving the caller awaiting forever
+        // (the actor loop otherwise just logs and moves on).
+        if (!_actions.Writer.TryWrite(async () =>
+            {
+                try
+                {
+                    await action(tcs).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            }))
             tcs.TrySetException(new ObjectDisposedException(nameof(CoLibraNode)));
         return tcs.Task;
     }

@@ -36,6 +36,56 @@ public class CoordinatorLeaseTableTests
     }
 
     [Fact]
+    public void Revoked_key_stays_held_down_until_the_old_owner_would_self_fence()
+    {
+        // The revocation hold-down must outlast the old owner's self-fence horizon
+        // (LeaseTtl - LeaseRenewSafetyMargin), or a re-grant can race an owner that never heard the
+        // revocation (lost push + stalled renewals) and both hold the key at once.
+        var table = Table(o => o.LoadBalanceTolerance = 0); // defaults: LeaseTtl 15s, margin 3s, heartbeat 1s
+        table.NodeUp(_nodeA, 1);
+        table.NodeUp(_nodeB, 1);
+        var k1 = new LeaseKey("t", "1");
+        var k2 = new LeaseKey("t", "2");
+        table.Acquire(_nodeA, Guid.NewGuid(), k1, ProcessingPreference.This, Now());
+        table.Acquire(_nodeA, Guid.NewGuid(), k2, ProcessingPreference.This, Now());
+
+        var revoked = table.ForceRebalance(null, Now());
+        Assert.Single(revoked); // A sheds its newest key down to the mean
+        var shedKey = revoked[0].Key;
+
+        // Between the old 2.5x-heartbeat hold-down (2.5 s) and the self-fence horizon (12 s), the
+        // key must NOT be regrantable: the old owner may still believe it holds it.
+        _time.Advance(TimeSpan.FromSeconds(5));
+        var early = table.Acquire(_nodeB, Guid.NewGuid(), shedKey, ProcessingPreference.This, Now()).Immediate!.Value;
+        Assert.False(early.Granted, "revoked key was regrantable before the old owner's self-fence horizon");
+
+        // Past the self-fence horizon it is safely acquirable by another node.
+        _time.Advance(TimeSpan.FromSeconds(9)); // total 14 s > 12 s
+        var late = table.Acquire(_nodeB, Guid.NewGuid(), shedKey, ProcessingPreference.This, Now()).Immediate!.Value;
+        Assert.True(late.Granted);
+    }
+
+    [Fact]
+    public void Grants_never_regress_below_an_asserted_higher_term_token()
+    {
+        // A new coordinator elected with a LOW term (it was partitioned during a higher term) adopts
+        // a member's held lease carrying a token from that higher term. A later grant of the SAME key
+        // must still produce a strictly greater fencing token — otherwise an external system fenced on
+        // the high token would reject the legitimate new owner (and accept a stale writer).
+        var table = Table(term: 6); // elected low, having missed term 9
+        table.NodeUp(_nodeA, 1);
+        table.NodeUp(_nodeB, 1);
+        var highToken = new FencingToken(9, 42); // node A held this from term 9
+        table.AssertHeld(_nodeA, [(Key, highToken)], Now());
+
+        table.Release(_nodeA, Key, out _);
+        var regrant = table.Acquire(_nodeB, Guid.NewGuid(), Key, ProcessingPreference.This, Now()).Immediate!.Value;
+
+        Assert.True(regrant.Granted);
+        Assert.True(regrant.Token > highToken, $"fencing token regressed: {regrant.Token} <= asserted {highToken}");
+    }
+
+    [Fact]
     public void Denies_key_held_by_another_node_and_reports_owner()
     {
         var table = Table();

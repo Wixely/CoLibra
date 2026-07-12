@@ -142,6 +142,36 @@ public class FailoverAndSplitBrainTests(ITestOutputHelper output) : IAsyncLifeti
     }
 
     [Fact]
+    public async Task Coordinator_does_not_regrant_a_partitioned_members_lease_before_it_self_fences()
+    {
+        // 3 nodes: a single member is partitioned into the minority. The coordinator + the other
+        // member stay the majority. This is NOT the accepted 2-node split-brain case — exclusivity
+        // must hold: the coordinator must not free and re-grant M's lease while M (still running,
+        // not yet self-fenced) keeps answering CanProcess == true for it.
+        var coordinator = await _cluster.StartNodeAsync();
+        var m = await _cluster.StartNodeAsync();
+        var n = await _cluster.StartNodeAsync();
+        await TestCluster.WaitUntilAsync(() => coordinator.Members.Count == 3);
+
+        Assert.True(await m.CanProcessAsync("t", "K", ProcessingPreference.This));
+
+        // Isolate M; the coordinator and N remain a quorum and keep coordinating.
+        _cluster.Partition([coordinator, n], [m]);
+
+        // The coordinator times M out of the membership after MemberTimeout.
+        await TestCluster.WaitUntilAsync(() => coordinator.Members.Count == 2,
+            because: "the coordinator drops the partitioned member from membership");
+
+        // M has not self-fenced yet (that happens only at LeaseTtl - safety margin, which is
+        // configured strictly later than MemberTimeout). While M still owns K, N must be denied.
+        var mStillHoldsK = await m.CanProcessAsync("t", "K");
+        var nStoleK = await n.CanProcessAsync("t", "K", ProcessingPreference.This);
+        Assert.True(mStillHoldsK, "precondition: M still believes it owns K within the safety window");
+        Assert.False(nStoleK,
+            "EXCLUSIVITY VIOLATION: coordinator re-granted a partitioned member's lease before the member self-fenced");
+    }
+
+    [Fact]
     public async Task Throw_policy_raises_on_operations_during_quorum_loss()
     {
         var nodes = new List<CoLibraNode>();

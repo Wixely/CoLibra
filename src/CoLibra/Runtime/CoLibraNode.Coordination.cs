@@ -46,6 +46,12 @@ internal sealed partial class CoLibraNode
 
                 break;
 
+            case LeaveNoticeMessage when _coordinator is { } coordinator:
+                // Clean shutdown: the member holds no leases anymore, so reclaim them immediately.
+                // A silent partition or crash can't send this, so those still wait for the deadline.
+                RemoveMember(coordinator, peer.PeerId, "graceful leave", graceful: true);
+                break;
+
             case CompletionSyncMessage m:
                 HandleCompletionSync(peer, m);
                 break;
@@ -307,6 +313,12 @@ internal sealed partial class CoLibraNode
             [.. request.HeldLeases.Select(h => (h.ToKey(), h.ToToken()))],
             now);
 
+        // AssertHeld may have advanced the table's term past a higher-term token the joiner asserted;
+        // bring the coordinator's announced term into step (before the JoinResponse below carries it)
+        // so grants and announces agree and no rival contests a phantom-lower term.
+        if (coordinator.Table.Term > coordinator.Term)
+            EscalateTerm(coordinator, coordinator.Table.Term);
+
         _ = SendSafeAsync(peer.Channel, new JoinResponseMessage(
             coordinator.Term,
             BuildMemberDtos(coordinator),
@@ -361,9 +373,20 @@ internal sealed partial class CoLibraNode
             return;
         }
 
-        var outcome = coordinator.Table.Acquire(
-            requester, request.RequestId, new LeaseKey(request.LeaseType, request.LeaseId),
-            request.Preference, Now());
+        var key = new LeaseKey(request.LeaseType, request.LeaseId);
+
+        // A forced routed-assignment for this key is in flight: its token is issued and the assignee
+        // is installing it, but it is not in the table yet (committed on ack). Granting an exclusive
+        // acquire into that gap yields two owners with a regressed fencing token, so deny it as
+        // held-by-the-assignee. The requester retries after the assignment commits.
+        if (coordinator.PendingAssignments.TryGetValue(key, out var pendingAssignment))
+        {
+            DispatchDecision(coordinator, new GrantDecision(
+                requester, request.RequestId, key, false, default, LeaseDenialReason.HeldByOther, pendingAssignment.Assignee));
+            return;
+        }
+
+        var outcome = coordinator.Table.Acquire(requester, request.RequestId, key, request.Preference, Now());
         if (outcome.Immediate is { } decision)
             DispatchDecision(coordinator, decision);
         foreach (var resolved in outcome.Resolved)
@@ -416,7 +439,7 @@ internal sealed partial class CoLibraNode
         }
     }
 
-    private void RemoveMember(CoordinatorRole coordinator, NodeId nodeId, string reason)
+    private void RemoveMember(CoordinatorRole coordinator, NodeId nodeId, string reason, bool graceful = false)
     {
         if (!coordinator.Sessions.Remove(nodeId, out var session))
             return;
@@ -424,7 +447,20 @@ internal sealed partial class CoLibraNode
         _logger.LogWarning("Member {NodeId} removed: {Reason}", nodeId, reason);
         _ = session.Connection.DisposeAsync();
         coordinator.RecentlyDeparted[nodeId] = Now() + ToTicks(_options.MemberTimeout) * 6;
-        NotifyAvailable(coordinator, coordinator.Table.NodeDown(nodeId));
+        if (graceful)
+        {
+            // The member told us it is shutting down cleanly: it holds no leases now, so reclaim
+            // and offer them immediately.
+            NotifyAvailable(coordinator, coordinator.Table.NodeDown(nodeId));
+        }
+        else
+        {
+            // Timeout or dropped connection: the member may merely be partitioned and still believe
+            // it owns its leases until it self-fences. Drop it from membership/load-balancing now but
+            // keep its leases until their TTL deadline (freed by Sweep) so two nodes never own a key.
+            coordinator.Table.MemberDeparted(nodeId);
+        }
+
         HandleAssigneeDeparted(coordinator, nodeId);
         UpdateCoordinatorMembership(coordinator);
     }
@@ -676,6 +712,9 @@ internal sealed partial class CoLibraNode
 
         table.NodeUp(LocalNodeId, _options.Weight, _acceptWork);
         table.AssertHeld(LocalNodeId, [.. _held.Select(kv => (kv.Key, kv.Value.Token))], now);
+        // Our own held tokens are normally below the elected term, but stay consistent if not.
+        coordinator.Term = table.Term;
+        _highestTerm = Math.Max(_highestTerm, table.Term);
 
         // Keep pre-election members in the quorum denominator until they rejoin or decay.
         foreach (var previous in _members.Where(m => m.NodeId != LocalNodeId))

@@ -152,6 +152,34 @@ public class RoutedDeliveryTests(ITestOutputHelper output) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Forced_assignment_in_flight_blocks_a_concurrent_exclusive_acquire()
+    {
+        var a = await _cluster.StartNodeAsync(WithRouting); // coordinator + router + acquirer
+        var b = await _cluster.StartNodeAsync(WithRouting); // remote handler (assignee)
+        var c = await _cluster.StartNodeAsync(WithRouting); // exclusive acquirer
+        var sink = NewSink();
+        _ = Handle(b, "evt", sink);
+        await WaitForAdvertisersAsync(a, "evt", 1);
+
+        // Race a routed assignment (a force-assigns the key to b via a two-step ack) against c
+        // acquiring the SAME key exclusively. If c is granted during the assignment's ack gap, the
+        // key ends up owned by both b (routed) and c (exclusive) — dual ownership with a regressed
+        // fencing token. Exclusivity forbids that outcome.
+        for (var i = 0; i < 40; i++)
+        {
+            var key = $"race{i}";
+            var route = a.Router.RouteAsync("evt", key, new byte[] { 1 }).AsTask();
+            var acquire = c.CanProcessAsync("evt", key, ProcessingPreference.This).AsTask();
+            await Task.WhenAll(route, acquire);
+
+            var acquired = await acquire;
+            var routedOwner = (await route).Owner;
+            Assert.False(acquired && routedOwner == b.LocalNodeId,
+                $"dual ownership on '{key}': c acquired it exclusively while it was force-assigned to b");
+        }
+    }
+
+    [Fact]
     public async Task Relay_path_works_without_direct_channels()
     {
         var a = await _cluster.StartNodeAsync(o => { WithRouting(o); o.Routing.UseDirectChannels = false; });

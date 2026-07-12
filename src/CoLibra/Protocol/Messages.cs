@@ -25,6 +25,7 @@ internal enum MessageType : byte
     Heartbeat = 23,
     HeartbeatAck = 24,
     MembershipUpdate = 25,
+    LeaveNotice = 26,
 
     // Leases
     LeaseAcquire = 30,
@@ -254,6 +255,13 @@ internal sealed record LeaseReleaseMessage(
     string LeaseType, string LeaseId, long Term, long Sequence, bool AsCompleted = false) : Message
 {
     public override MessageType Type => MessageType.LeaseRelease;
+}
+
+/// <summary>A member telling the coordinator it is shutting down cleanly (so its leases can be
+/// reclaimed at once, rather than held to their TTL as for a silent partition or crash).</summary>
+internal sealed record LeaveNoticeMessage(Guid NodeId) : Message
+{
+    public override MessageType Type => MessageType.LeaveNotice;
 }
 
 internal sealed record LeaseAvailableNotifyMessage(IReadOnlyList<LeaseKeyDto> Keys) : Message

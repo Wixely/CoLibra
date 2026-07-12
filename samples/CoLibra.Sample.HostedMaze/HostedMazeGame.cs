@@ -243,7 +243,11 @@ internal sealed class HostedMazeGame(
                 _positions[p.Name] = p;
             _awaySince.Clear();
             foreach (var name in snapshot.Away)
-                _awaySince[name] = 0; // clients don't sweep; they just render the host's away set
+                // Stamp with 'now', not 0: clients only render the away set, but if this client is
+                // later elected host, its grace sweep compares TickCount64 - value > GraceMs. A 0
+                // here would be instantly past the window (uptime > grace), evicting every player
+                // who was mid-grace at the moment of host migration. 'now' gives them a fresh window.
+                _awaySince[name] = Environment.TickCount64;
         }
 
         _dirty = true;

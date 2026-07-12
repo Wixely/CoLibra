@@ -60,10 +60,13 @@ internal sealed partial class CoLibraNode
                     TrackedLeaseCount = coord.Table.LeaseCount,
                     SessionCount = coord.Sessions.Count,
                     NotAcceptingNodeCount = coord.Table.NotAcceptingCount,
+                    // Key by the FULL node id: NodeId.ToString() is an 8-char prefix that collides
+                    // for nodes started in the same ~65s window (GUID v7 timestamp bits), which
+                    // would throw a duplicate-key ArgumentException here.
                     LeasesByTypePerNode = coord.Table.CountsByType.ToDictionary(
                         kv => kv.Key,
                         kv => (IReadOnlyDictionary<string, int>)kv.Value.ToDictionary(
-                            n => n.Key.ToString(), n => n.Value, StringComparer.Ordinal),
+                            n => n.Key.Value.ToString(), n => n.Value, StringComparer.Ordinal),
                         StringComparer.Ordinal),
                 }
                 : null,

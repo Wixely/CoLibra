@@ -18,6 +18,7 @@ namespace CoLibra.Protocol;
 [JsonSerializable(typeof(HeartbeatMessage))]
 [JsonSerializable(typeof(HeartbeatAckMessage))]
 [JsonSerializable(typeof(MembershipUpdateMessage))]
+[JsonSerializable(typeof(LeaveNoticeMessage))]
 [JsonSerializable(typeof(LeaseAcquireMessage))]
 [JsonSerializable(typeof(LeaseGrantResultMessage))]
 [JsonSerializable(typeof(LeaseReleaseMessage))]
@@ -61,6 +62,7 @@ internal sealed class JsonTypeInfoResolverForMessages
         HeartbeatMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.HeartbeatMessage),
         HeartbeatAckMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.HeartbeatAckMessage),
         MembershipUpdateMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.MembershipUpdateMessage),
+        LeaveNoticeMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaveNoticeMessage),
         LeaseAcquireMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseAcquireMessage),
         LeaseGrantResultMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseGrantResultMessage),
         LeaseReleaseMessage m => JsonSerializer.SerializeToUtf8Bytes(m, CoLibraJsonContext.Default.LeaseReleaseMessage),
@@ -99,6 +101,7 @@ internal sealed class JsonTypeInfoResolverForMessages
         MessageType.Heartbeat => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.HeartbeatMessage),
         MessageType.HeartbeatAck => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.HeartbeatAckMessage),
         MessageType.MembershipUpdate => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.MembershipUpdateMessage),
+        MessageType.LeaveNotice => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaveNoticeMessage),
         MessageType.LeaseAcquire => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseAcquireMessage),
         MessageType.LeaseGrantResult => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseGrantResultMessage),
         MessageType.LeaseRelease => JsonSerializer.Deserialize(payload, CoLibraJsonContext.Default.LeaseReleaseMessage),

@@ -66,9 +66,14 @@ internal sealed class CoordinatorLeaseTable
         _completions = completions;
         _ttlTicks = (long)(options.LeaseTtl.TotalSeconds * timeProvider.TimestampFrequency);
         _graceTicks = (long)(options.OtherPreferenceGraceWindow.TotalSeconds * timeProvider.TimestampFrequency);
-        // Hold-down after a forced revocation: long enough for the old owner to hear (push or
-        // next renewal) and stop before anyone new can be granted the key.
-        _revokeHoldTicks = (long)(options.HeartbeatInterval.TotalSeconds * 2.5 * timeProvider.TimestampFrequency);
+        // Hold-down after a forced revocation: long enough for the old owner to have provably
+        // stopped before anyone new is granted the key. It normally hears the revocation via the
+        // push or its next renewal within ~a heartbeat, but if BOTH stall it only stops at its
+        // self-fence horizon (LeaseTtl - LeaseRenewSafetyMargin) — so the hold-down must cover that,
+        // exactly as a member-timeout reclaim does, or two nodes could hold the key at once.
+        var selfFenceSeconds = (options.LeaseTtl - options.LeaseRenewSafetyMargin).TotalSeconds;
+        var holdDownSeconds = Math.Max(options.HeartbeatInterval.TotalSeconds * 2.5, selfFenceSeconds);
+        _revokeHoldTicks = (long)(holdDownSeconds * timeProvider.TimestampFrequency);
     }
 
     public long Term { get; private set; }
@@ -133,6 +138,29 @@ internal sealed class CoordinatorLeaseTable
         }
 
         return freed;
+    }
+
+    /// <summary>
+    /// A member left the cluster's membership (heartbeat timeout or dropped connection). Unlike
+    /// <see cref="NodeDown"/> this does NOT free the member's leases: the member may merely be
+    /// partitioned and still correctly own them until its own self-fence horizon
+    /// (LeaseTtl - LeaseRenewSafetyMargin). Its leases stay reserved and are freed by
+    /// <see cref="Sweep"/> once their TTL deadline passes — on or after that self-fence — so two
+    /// nodes never hold the same key at once. Only load-balancing bookkeeping and the member's
+    /// own parked requests are cleared now; its lease counts stay until <see cref="Sweep"/> frees
+    /// each lease (and decrements them), keeping the counts balanced.
+    /// </summary>
+    public void MemberDeparted(NodeId node)
+    {
+        _nodeWeights.Remove(node);
+        _notAccepting.Remove(node);
+
+        foreach (var (key, pending) in _pendingOther.ToList())
+        {
+            pending.RemoveAll(p => p.Requester == node);
+            if (pending.Count == 0)
+                _pendingOther.Remove(key);
+        }
     }
 
     public AcquireOutcome Acquire(NodeId requester, Guid requestId, LeaseKey key, ProcessingPreference preference, long nowTs)
@@ -276,6 +304,18 @@ internal sealed class CoordinatorLeaseTable
     public List<LeaseKey> AssertHeld(NodeId owner, IReadOnlyList<(LeaseKey Key, FencingToken Token)> asserts, long nowTs)
     {
         var rejected = new List<LeaseKey>();
+
+        // A member may assert a token from a HIGHER term than this coordinator serves — a freshly
+        // elected coordinator can be term-behind if it was partitioned during that term. Future grants
+        // of these keys come from NextToken (this.Term), so advance our term above any asserted one, or
+        // a re-grant could produce a lower token than one already handed out — a fencing regression.
+        // A strictly higher term dominates any sequence, so +1 past the max asserted term suffices.
+        foreach (var (_, token) in asserts)
+        {
+            if (token.Term >= Term)
+                EscalateTerm(token.Term + 1);
+        }
+
         foreach (var (key, token) in asserts)
         {
             if (_completions?.Contains(key) == true)
@@ -290,8 +330,17 @@ internal sealed class CoordinatorLeaseTable
                 continue;
             }
 
-            if (_leases.TryGetValue(key, out var entry) && entry.Owner != owner)
+            if (_leases.TryGetValue(key, out var entry))
             {
+                if (entry.Owner == owner)
+                {
+                    // Same owner re-asserting a lease still in the table (e.g. a brief disconnect
+                    // where the coordinator has not yet expired it): refresh the deadline only —
+                    // re-running AdjustCount(+1) here would permanently double-count the lease.
+                    _leases[key] = new Entry { Owner = owner, Token = token, DeadlineTs = nowTs + _ttlTicks };
+                    continue;
+                }
+
                 if (entry.Token >= token)
                 {
                     rejected.Add(key);

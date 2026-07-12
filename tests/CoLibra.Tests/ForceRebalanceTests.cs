@@ -166,8 +166,9 @@ public class ForceRebalanceTests
         var lost = table.Renew(a, [(key, new FencingToken(1, 999))], _time.GetTimestamp());
         Assert.Equal([key], lost);
 
-        // After the hold-down (2.5 × heartbeat), the sweep frees it and b can take it.
-        _time.Advance(TimeSpan.FromSeconds(3));
+        // After the hold-down (the old owner's self-fence horizon, LeaseTtl - LeaseRenewSafetyMargin
+        // = 12 s at defaults), the sweep frees it and b can take it.
+        _time.Advance(TimeSpan.FromSeconds(13));
         var sweep = table.Sweep(_time.GetTimestamp());
         Assert.Contains(sweep.Freed, f => f.Key == key);
         var granted = table.Acquire(b, Guid.NewGuid(), key, ProcessingPreference.This, _time.GetTimestamp());
