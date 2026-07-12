@@ -387,7 +387,15 @@ internal sealed class HostedMazeGame(
                 if (_dirty && !Console.IsInputRedirected)
                 {
                     _dirty = false;
-                    Render();
+                    try
+                    {
+                        Render();
+                    }
+                    catch (Exception ex)
+                    {
+                        // A single bad frame must never freeze the console; drop it and keep going.
+                        logger.LogDebug(ex, "Render frame failed");
+                    }
                 }
 
                 await Task.Delay(40, ct);
@@ -414,7 +422,17 @@ internal sealed class HostedMazeGame(
             return;
 
         var hostName = cluster.Members.FirstOrDefault(m => m.IsCoordinator)?.Name;
-        var occupants = players.ToDictionary(p => (p.X, p.Y), p => p);
+
+        // Players can occupy the same cell (you can walk onto another player), so we can't ToDictionary
+        // by position — the duplicate key would throw and kill this render loop. Keep one marker per
+        // cell, preferring YOU (then the host), so you never lose sight of your own avatar.
+        int Rank(PlayerPos p) => p.Name == settings.Name ? 2 : p.Name == hostName ? 1 : 0;
+        var occupants = new Dictionary<(int X, int Y), PlayerPos>();
+        foreach (var p in players)
+        {
+            if (!occupants.TryGetValue((p.X, p.Y), out var current) || Rank(p) > Rank(current))
+                occupants[(p.X, p.Y)] = p;
+        }
 
         var sb = new StringBuilder(Ansi.Home);
         sb.Append(Ansi.Fg(180, 180, 190))
