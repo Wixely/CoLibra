@@ -180,6 +180,27 @@ public class RoutedDeliveryTests(ITestOutputHelper output) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Resolver_owner_cache_is_bounded()
+    {
+        Action<CoLibraOptions> withCap = o => { WithRouting(o); o.Routing.OwnerCacheMaxEntries = 20; };
+        var a = await _cluster.StartNodeAsync(withCap); // coordinator
+        var b = await _cluster.StartNodeAsync(withCap); // handler
+        var c = await _cluster.StartNodeAsync(withCap); // member that routes (and caches owners)
+        var sink = NewSink();
+        _ = Handle(b, "evt", sink);
+        await WaitForAdvertisersAsync(a, "evt", 1);
+
+        // c resolves and caches an owner per distinct routed key; the cache must stay within the cap
+        // rather than growing one entry per ever-new id forever.
+        for (var i = 0; i < 60; i++)
+            await c.Router.RouteAsync("evt", $"k{i}", new byte[] { 1 });
+
+        var diag = await c.GetDiagnosticsAsync();
+        Assert.True(diag.Transport.OwnerCacheCount <= 20,
+            $"owner cache grew to {diag.Transport.OwnerCacheCount}, past the cap of 20");
+    }
+
+    [Fact]
     public async Task Relay_path_works_without_direct_channels()
     {
         var a = await _cluster.StartNodeAsync(o => { WithRouting(o); o.Routing.UseDirectChannels = false; });

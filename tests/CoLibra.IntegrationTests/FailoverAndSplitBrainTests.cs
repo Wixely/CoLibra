@@ -85,6 +85,28 @@ public class FailoverAndSplitBrainTests(ITestOutputHelper output) : IAsyncLifeti
     }
 
     [Fact]
+    public async Task Minority_coordinator_stays_quorum_lost_past_the_departed_decay_window()
+    {
+        var nodes = new List<CoLibraNode> { await _cluster.StartNodeAsync() };
+        for (var i = 0; i < 4; i++)
+            nodes.Add(await _cluster.StartNodeAsync());
+        var coordinator = nodes[0];
+        var majority = nodes.Skip(2).ToArray();
+        await TestCluster.WaitUntilAsync(() => coordinator.Members.Count == 5);
+
+        _cluster.Partition([coordinator, nodes[1]], majority);
+        await TestCluster.WaitUntilAsync(() => coordinator.State == ClusterState.QuorumLost,
+            because: "2 of 5 is below quorum");
+
+        // Past the RecentlyDeparted decay window (MemberTimeout*6): the minority coordinator must NOT
+        // forget the majority and re-declare quorum — that would resume granting alongside the
+        // majority's own coordinator (dual granting).
+        await Task.Delay(TimeSpan.FromMilliseconds((600 * 6 + 2500) * TestCluster.Scale));
+        Assert.Equal(ClusterState.QuorumLost, coordinator.State);
+        Assert.False(await coordinator.CanProcessAsync("t", "x"));
+    }
+
+    [Fact]
     public async Task Healing_a_partition_merges_back_to_a_single_coordinator()
     {
         var nodes = new List<CoLibraNode> { await _cluster.StartNodeAsync() };

@@ -30,6 +30,26 @@ public class CompletionTrackingTests(ITestOutputHelper output) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Completion_by_a_non_owner_stops_the_owner_reprocessing()
+    {
+        var coordinator = await _cluster.StartNodeAsync(WithCompletions);
+        var owner = await _cluster.StartNodeAsync(WithCompletions);
+        var other = await _cluster.StartNodeAsync(WithCompletions);
+
+        // owner (a member) exclusively holds K.
+        Assert.True(await owner.CanProcessAsync("job", "K", ProcessingPreference.This));
+
+        // A different node marks K completed even though it never owned it.
+        await other.MarkCompletedAsync("job", "K");
+
+        // The owner must stop reprocessing K and drop the now-finished lease, not keep answering true.
+        await TestCluster.WaitUntilAsync(async () => !await owner.CanProcessAsync("job", "K"),
+            because: "a key completed elsewhere must not be reprocessed by its owner");
+        await TestCluster.WaitUntilAsync(() => !owner.HeldLeases.Contains(new LeaseKey("job", "K")),
+            because: "the owner should drop a lease completed elsewhere");
+    }
+
+    [Fact]
     public async Task Completed_work_survives_its_owners_death()
     {
         var a = await _cluster.StartNodeAsync(WithCompletions);

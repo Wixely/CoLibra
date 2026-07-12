@@ -280,12 +280,35 @@ internal sealed partial class CoLibraNode : ICoLibraRouter
 
         if (reply.Outcome == ResolveOutcome.Resolved && reply.OwnerNodeId is { } ownerId && new NodeId(ownerId) != LocalNodeId)
         {
-            _ownerCache[pending.Key] = new CachedOwner(
+            CacheResolvedOwner(pending.Key, new CachedOwner(
                 new NodeId(ownerId), ParseHint(reply.OwnerHost, reply.OwnerPort),
-                Now() + ToTicks(_options.Routing.OwnerCacheTtl));
+                Now() + ToTicks(_options.Routing.OwnerCacheTtl)));
         }
 
         pending.Tcs.TrySetResult(reply);
+    }
+
+    // Routed ids are often ever-new (event/session ids), so the resolver's owner cache would grow for
+    // the process lifetime without a bound. Cap it: when full and adding a new key, drop already-expired
+    // entries first, then evict the soonest-to-expire.
+    private void CacheResolvedOwner(LeaseKey key, CachedOwner owner)
+    {
+        var max = _options.Routing.OwnerCacheMaxEntries;
+        if (_ownerCache.Count >= max && !_ownerCache.ContainsKey(key))
+        {
+            var now = Now();
+            foreach (var stale in _ownerCache.Where(kv => kv.Value.ExpiresTs <= now).Select(kv => kv.Key).ToList())
+                _ownerCache.Remove(stale);
+
+            if (_ownerCache.Count >= max)
+            {
+                foreach (var victim in _ownerCache.OrderBy(kv => kv.Value.ExpiresTs)
+                             .Take(_ownerCache.Count - max + 1).Select(kv => kv.Key).ToList())
+                    _ownerCache.Remove(victim);
+            }
+        }
+
+        _ownerCache[key] = owner;
     }
 
     private Task InvalidateOwnerCacheAsync(LeaseKey key) =>

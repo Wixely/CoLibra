@@ -11,6 +11,41 @@ public class LeaseNegotiationTests : IAsyncLifetime
     public ValueTask DisposeAsync() => _cluster.DisposeAsync();
 
     [Fact]
+    public async Task Stopping_a_node_cancels_its_held_lease_lost_tokens()
+    {
+        var node = await _cluster.StartNodeAsync();
+        var acq = await node.TryAcquireAsync("t", "1");
+        Assert.True(acq.Granted);
+        var lost = acq.Lease!.Lost;
+        Assert.False(lost.IsCancellationRequested);
+
+        await _cluster.StopNodeAsync(node);
+
+        Assert.True(lost.IsCancellationRequested,
+            "held-lease Lost tokens must fire on shutdown so external-write guards halt");
+    }
+
+    [Fact]
+    public async Task Member_self_fences_at_the_coordinators_shorter_lease_ttl()
+    {
+        // The coordinator keeps leases only ~2 s; the member is (mis)configured with a much longer
+        // TTL. Partitioned into the minority, the member must self-fence at the COORDINATOR's TTL,
+        // not its own — otherwise it still believes it owns K long after the coordinator reclaimed it
+        // (dual ownership under a heterogeneous / rolling LeaseTtl).
+        var coordinator = await _cluster.StartNodeAsync(o => o.LeaseTtl = TimeSpan.FromSeconds(2 * TestCluster.Scale));
+        var member = await _cluster.StartNodeAsync(o => o.LeaseTtl = TimeSpan.FromSeconds(15 * TestCluster.Scale));
+        var third = await _cluster.StartNodeAsync(o => o.LeaseTtl = TimeSpan.FromSeconds(2 * TestCluster.Scale));
+        await TestCluster.WaitUntilAsync(() => coordinator.Members.Count == 3);
+        Assert.True(await member.CanProcessAsync("t", "K", ProcessingPreference.This));
+
+        _cluster.Partition([coordinator, third], [member]);
+
+        await TestCluster.WaitUntilAsync(() => !member.HeldLeases.Contains(new LeaseKey("t", "K")),
+            timeout: TimeSpan.FromSeconds(8 * TestCluster.Scale),
+            because: "the member should drop K at the coordinator's ~2 s TTL, well before its own 15 s");
+    }
+
+    [Fact]
     public async Task Exactly_one_node_can_process_a_key()
     {
         var a = await _cluster.StartNodeAsync();

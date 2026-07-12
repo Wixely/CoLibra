@@ -41,6 +41,7 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     private volatile ImmutableDictionary<LeaseKey, LocalLease> _heldSnapshot =
         ImmutableDictionary<LeaseKey, LocalLease>.Empty;
     private long _lastAckTimestamp;
+    private long _coordinatorLeaseTtlMs; // coordinator's advertised LeaseTtl (0 until first heard)
     private volatile bool _isCoordinatorRole;
     private volatile bool _acceptWork;
     private readonly Dictionary<Guid, PendingAcquire> _pendingAcquires = [];
@@ -131,6 +132,13 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
             SetState(ClusterState.Stopped);
             FailAllPending(LeaseDenialReason.NoCoordinator);
             FailAllPendingResolves();
+
+            // Give up every held lease on shutdown: fire each IExclusiveLease.Lost token so any
+            // external-write guard halts, and dispose the CTS (otherwise the tokens never cancel and
+            // the CTS objects leak). Null reason: the Lost token is the contract here; we skip the
+            // cluster LeaseLost event to avoid re-entering user handlers mid-dispose.
+            foreach (var key in _held.Keys.ToList())
+                RemoveHeld(key, lossReason: null);
             foreach (var pendingAck in _pendingMessageAcks.Values.ToList())
                 pendingAck.TrySetResult(DirectAckStatus.Unreachable);
             _pendingMessageAcks.Clear();
@@ -186,11 +194,14 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         var key = new LeaseKey(type, id);
         ThrowIfSplitBrainPolicyThrows();
 
+        // Completion beats ownership: a key finished anywhere (even by a NON-owner) is done for good,
+        // so its current holder must stop too — check this BEFORE IsHeldAndFresh, or the owner would
+        // keep answering true and reprocess a completed key forever.
+        if (_completions?.Contains(key) == true)
+            return ValueTask.FromResult(false);
         if (IsHeldAndFresh(key))
             return ValueTask.FromResult(true); // held work continues even when not accepting new
         if (!_acceptWork)
-            return ValueTask.FromResult(false);
-        if (_completions?.Contains(key) == true)
             return ValueTask.FromResult(false);
         if (_negativeCache.IsDenied(key))
             return ValueTask.FromResult(false);
@@ -367,7 +378,25 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         if (_isCoordinatorRole)
             return true;
         var elapsed = _time.GetElapsedTime(Volatile.Read(ref _lastAckTimestamp));
-        return elapsed < _options.LeaseTtl - _options.LeaseRenewSafetyMargin;
+        return elapsed < EffectiveLeaseTtl() - _options.LeaseRenewSafetyMargin;
+    }
+
+    /// <summary>
+    /// The lease lifetime a member should honour: the coordinator is the authority on when it
+    /// reclaims a lease, so a member must not consider one fresh longer than the coordinator keeps
+    /// it (or exclusivity breaks under a heterogeneous / rolling <see cref="CoLibraOptions.LeaseTtl"/>).
+    /// Uses whichever of the local and coordinator-advertised TTL is shorter; the coordinator uses
+    /// its own.
+    /// </summary>
+    private TimeSpan EffectiveLeaseTtl()
+    {
+        if (_isCoordinatorRole)
+            return _options.LeaseTtl;
+        var ms = Volatile.Read(ref _coordinatorLeaseTtlMs);
+        if (ms <= 0)
+            return _options.LeaseTtl;
+        var coordinatorTtl = TimeSpan.FromMilliseconds(ms);
+        return coordinatorTtl < _options.LeaseTtl ? coordinatorTtl : _options.LeaseTtl;
     }
 
     /// <summary>
@@ -441,12 +470,24 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
 
             var pending = new PendingAcquire(Guid.NewGuid(), key, preference, tcs, Now());
             _pendingAcquires[pending.RequestId] = pending;
-            ct.Register(() => Post(() =>
+
+            // Register cancellation only for a cancelable token, and keep the registration so it can be
+            // disposed when the acquire completes. Otherwise a long-lived token (the common
+            // stoppingToken passed to CanProcessAsync in a hot loop) accumulates a registration per
+            // call for the whole process lifetime.
+            if (ct.CanBeCanceled)
             {
-                if (_pendingAcquires.Remove(pending.RequestId))
-                    tcs.TrySetCanceled(ct);
-                return ValueTask.CompletedTask;
-            }));
+                pending.CancelRegistration = ct.Register(() => Post(() =>
+                {
+                    if (_pendingAcquires.Remove(pending.RequestId, out var cancelled))
+                    {
+                        cancelled.CancelRegistration.Dispose();
+                        tcs.TrySetCanceled(ct);
+                    }
+
+                    return ValueTask.CompletedTask;
+                }));
+            }
 
             DispatchPendingAcquire(pending);
             return ValueTask.CompletedTask;
@@ -477,6 +518,8 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
     {
         if (!_pendingAcquires.Remove(requestId, out var pending))
             return;
+
+        pending.CancelRegistration.Dispose(); // default (no-op) when the token was not cancelable
 
         if (result.Granted)
         {
@@ -627,6 +670,9 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         _logger.LogInformation("CoLibra node {NodeId} state {Previous} -> {Next}", LocalNodeId, previous, next);
         if (next is ClusterState.Member or ClusterState.Coordinator)
             _clusterReady.TrySetResult();
+        else if (next == ClusterState.Faulted)
+            _clusterReady.TrySetException(new InvalidOperationException(
+                "CoLibra node faulted: its NodeId was rejected as a duplicate by the cluster."));
         Raise(StateChanged, new ClusterStateChangedEventArgs { Previous = previous, Current = next });
     }
 
@@ -675,6 +721,8 @@ internal sealed partial class CoLibraNode : ICoLibraCluster, IAsyncDisposable
         TaskCompletionSource<GrantResult> Tcs, long CreatedTs)
     {
         public bool Sent { get; set; }
+
+        public CancellationTokenRegistration CancelRegistration { get; set; }
     }
 
     internal readonly record struct GrantResult(bool Granted, FencingToken Token, LeaseDenialReason Reason, NodeId? Owner);

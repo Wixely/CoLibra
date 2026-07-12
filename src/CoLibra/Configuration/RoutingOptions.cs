@@ -21,6 +21,13 @@ public sealed class RoutingOptions
     public TimeSpan OwnerCacheTtl { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Hard cap on resolver owner-cache entries. Routed ids are often ever-new (event/session ids),
+    /// so this bounds memory: when full, expired entries are dropped and then the soonest-to-expire
+    /// evicted. Default 10 000.
+    /// </summary>
+    public int OwnerCacheMaxEntries { get; set; } = 10_000;
+
+    /// <summary>
     /// Open direct member↔member channels for payloads (default). When false, every payload
     /// relays through the coordinator — fewer connections, more coordinator load.
     /// </summary>

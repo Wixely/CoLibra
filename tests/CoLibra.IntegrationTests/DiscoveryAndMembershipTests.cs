@@ -97,9 +97,13 @@ public class DiscoveryAndMembershipTests : IAsyncLifetime
 
         var duplicate = await _cluster.StartNodeAsync(o => o.NodeId = fixedId, waitForCluster: false);
         await TestCluster.WaitUntilAsync(() => duplicate.State == ClusterState.Faulted,
-            because: "a second live node with the same NodeId must fault");
+            because: "a second live node with the same NodeId must fault (the original, a different "
+                + "incarnation, keeps its place)");
         Assert.Equal(ClusterState.Member, original.State);
         Assert.Equal(ClusterState.Coordinator, coordinator.State);
+
+        // The faulted node fails WaitForClusterAsync fast rather than hanging forever.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => duplicate.WaitForClusterAsync());
     }
 
     [Fact]

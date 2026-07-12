@@ -525,6 +525,7 @@ internal sealed partial class CoLibraNode
             RemoveHeld(rejected.ToKey(), LeaseLossReason.ConflictLost);
 
         Volatile.Write(ref _lastAckTimestamp, now);
+        Volatile.Write(ref _coordinatorLeaseTtlMs, (long)(response.LeaseTtlSeconds * 1000));
         _negativeCache.Clear();
         _ownerCache.Clear(); // owners resolved under the previous coordinator may be stale
         CloseAllUdpLinks("joined a coordinator (term/wire-id scope changed)");

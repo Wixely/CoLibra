@@ -108,18 +108,25 @@ public interface ICoLibraCluster
     /// </summary>
     ValueTask<DiagnosticsSnapshot> GetDiagnosticsAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Raised when this node loses ownership of a lease.</summary>
+    // NOTE: every event below is raised SYNCHRONOUSLY on CoLibra's internal single-threaded actor.
+    // A handler that blocks, or that waits on any CoLibra call (e.g. `CanProcessAsync(...).Result`,
+    // `ReleaseAsync(...).GetAwaiter().GetResult()`), DEADLOCKS the node — that call needs the same
+    // actor the handler is occupying. A merely slow handler stalls heartbeats and can get the node
+    // timed out of the cluster. Keep handlers fast and non-blocking; hand real work to your own
+    // task/queue and return immediately. Exceptions thrown from a handler are caught and logged.
+
+    /// <summary>Raised when this node loses ownership of a lease. Runs on the actor thread — see the note above.</summary>
     event EventHandler<LeaseLostEventArgs>? LeaseLost;
 
-    /// <summary>Raised when a key this node was previously denied becomes available.</summary>
+    /// <summary>Raised when a key this node was previously denied becomes available. Runs on the actor thread — see the note above.</summary>
     event EventHandler<LeaseAvailableEventArgs>? LeaseAvailable;
 
-    /// <summary>Raised when nodes join or leave.</summary>
+    /// <summary>Raised when nodes join or leave. Runs on the actor thread — see the note above.</summary>
     event EventHandler<MembershipChangedEventArgs>? MembershipChanged;
 
-    /// <summary>Raised when the local node's state changes.</summary>
+    /// <summary>Raised when the local node's state changes. Runs on the actor thread — see the note above.</summary>
     event EventHandler<ClusterStateChangedEventArgs>? StateChanged;
 
-    /// <summary>Raised when split brain is detected.</summary>
+    /// <summary>Raised when split brain is detected. Runs on the actor thread — see the note above.</summary>
     event EventHandler<SplitBrainDetectedEventArgs>? SplitBrainDetected;
 }

@@ -201,7 +201,13 @@ internal sealed partial class CoLibraNode
         }
         else if (peer.IsCoordinatorLink && IsCurrentCoordinatorLink(peer))
         {
-            _completions.AddRange(keys, Now());
+            foreach (var key in _completions.AddRange(keys, Now()))
+            {
+                // A key finished elsewhere (possibly by a node that never owned it): if we hold it,
+                // stop renewing it and fire its Lost token so we neither reprocess nor keep the lease.
+                if (_held.ContainsKey(key))
+                    RemoveHeld(key, lossReason: null);
+            }
         }
     }
 
@@ -274,10 +280,13 @@ internal sealed partial class CoLibraNode
 
         if (coordinator.Sessions.TryGetValue(peer.PeerId, out var existing))
         {
-            // A session that is still heartbeating is a live duplicate; only a stale (ghost)
-            // session may be superseded by a restart with a newer incarnation.
+            // Same incarnation on a fresh connection = the SAME process reconnecting; its old session
+            // must be a ghost (e.g. a one-sided reset the coordinator never saw), so supersede it
+            // rather than bricking the reconnect as a "duplicate". A DIFFERENT incarnation is either a
+            // live duplicate process (reject — first holder wins) or a restart whose clean disconnect
+            // already removed the session (so we would not be here).
             var existingIsLive = Since(existing.LastSeenTs) < _options.MemberTimeout;
-            if (existingIsLive || peer.PeerIncarnation <= existing.Incarnation)
+            if (peer.PeerIncarnation != existing.Incarnation && (existingIsLive || peer.PeerIncarnation < existing.Incarnation))
             {
                 _ = SendSafeAsync(peer.Channel, new JoinRejectedMessage(
                     JoinRejectionReason.DuplicateNodeId,
@@ -446,18 +455,19 @@ internal sealed partial class CoLibraNode
 
         _logger.LogWarning("Member {NodeId} removed: {Reason}", nodeId, reason);
         _ = session.Connection.DisposeAsync();
-        coordinator.RecentlyDeparted[nodeId] = Now() + ToTicks(_options.MemberTimeout) * 6;
         if (graceful)
         {
-            // The member told us it is shutting down cleanly: it holds no leases now, so reclaim
-            // and offer them immediately.
+            // A clean shutdown is genuinely gone: forget it at once so it stops counting toward the
+            // quorum denominator (this is what lets the cluster scale down), and reclaim its leases now.
+            coordinator.RecentlyDeparted.Remove(nodeId);
             NotifyAvailable(coordinator, coordinator.Table.NodeDown(nodeId));
         }
         else
         {
-            // Timeout or dropped connection: the member may merely be partitioned and still believe
-            // it owns its leases until it self-fences. Drop it from membership/load-balancing now but
-            // keep its leases until their TTL deadline (freed by Sweep) so two nodes never own a key.
+            // Timeout or dropped connection: the member may merely be partitioned and still believe it
+            // owns its leases until it self-fences. Keep it in the quorum denominator (so a minority
+            // can't decay its way back to a false quorum) and hold its leases until their TTL deadline.
+            coordinator.RecentlyDeparted[nodeId] = Now() + ToTicks(_options.MemberTimeout) * 6;
             coordinator.Table.MemberDeparted(nodeId);
         }
 
@@ -524,6 +534,7 @@ internal sealed partial class CoLibraNode
         var now = Now();
         member.LastCoordinatorSignalTs = now;
         Volatile.Write(ref _lastAckTimestamp, now);
+        Volatile.Write(ref _coordinatorLeaseTtlMs, (long)(ack.LeaseTtlSeconds * 1000));
         _highestTerm = Math.Max(_highestTerm, ack.Term);
         foreach (var lost in ack.LostKeys)
             RemoveHeld(lost.ToKey(), LeaseLossReason.OwnedElsewhere);
@@ -839,15 +850,27 @@ internal sealed partial class CoLibraNode
         if (expired is null)
             return;
 
+        var removed = 0;
         foreach (var key in expired)
         {
+            // Re-read the deadline right before removing: a concurrent CanProcess may have touched the
+            // lease (advancing IdleDeadlineTs) between the scan above and here. Expiring it then would
+            // be a lost update — the checker just saw it fresh, so we would evict an in-use lease.
+            if (!_held.TryGetValue(key, out var local))
+                continue;
+            var deadline = Volatile.Read(ref local.IdleDeadlineTs);
+            if (deadline == 0 || now <= deadline)
+                continue; // touched (or set never-expire) since the scan — keep it
+
             RemoveHeld(key, LeaseLossReason.IdleExpired);
+            removed++;
             if (_coordinator is { } coordinator && coordinator.Table.Release(LocalNodeId, key, out var interested))
                 NotifyAvailable(coordinator, [(key, interested)]);
         }
 
-        _logger.LogInformation("Idle-expired {Count} untouched lease(s); {Remaining} still held",
-            expired.Count, _held.Count);
+        if (removed > 0)
+            _logger.LogInformation("Idle-expired {Count} untouched lease(s); {Remaining} still held",
+                removed, _held.Count);
     }
 
     /// <summary>Sweep cadence scaled to the smallest configured idle expiry; 0 = feature fully off.</summary>
@@ -927,9 +950,15 @@ internal sealed partial class CoLibraNode
                 HandleAcquireAsCoordinator(coordinator, requester, message);
         }
 
-        var expiredDeparted = coordinator.RecentlyDeparted.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList();
-        foreach (var nodeId in expiredDeparted)
-            coordinator.RecentlyDeparted.Remove(nodeId);
+        // Only forget timed-out departed nodes while we still HAVE quorum. In QuorumLost, keeping them
+        // in the denominator is exactly what stops a partitioned minority from decaying its way back to
+        // a false quorum and granting alongside the majority's coordinator. Departed nodes are also
+        // removed promptly when they rejoin (HandleJoinRequest) or leave cleanly (RemoveMember).
+        if (_state != ClusterState.QuorumLost)
+        {
+            foreach (var nodeId in coordinator.RecentlyDeparted.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList())
+                coordinator.RecentlyDeparted.Remove(nodeId);
+        }
 
         var alive = coordinator.Sessions.Count + 1;
         var knownSize = alive + coordinator.RecentlyDeparted.Count;
@@ -965,7 +994,7 @@ internal sealed partial class CoLibraNode
         if (_isCoordinatorRole || _held.Count == 0)
             return;
 
-        if (Since(Volatile.Read(ref _lastAckTimestamp)) >= _options.LeaseTtl - _options.LeaseRenewSafetyMargin)
+        if (Since(Volatile.Read(ref _lastAckTimestamp)) >= EffectiveLeaseTtl() - _options.LeaseRenewSafetyMargin)
         {
             _logger.LogWarning("Lease renewals unacknowledged beyond the safety margin; releasing {Count} held leases locally",
                 _held.Count);
