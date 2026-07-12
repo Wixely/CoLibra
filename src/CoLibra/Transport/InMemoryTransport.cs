@@ -176,6 +176,11 @@ internal sealed class InMemoryChannel(
 {
     public EndPoint RemoteEndPoint { get; } = remoteEndPoint;
 
+    // The in-memory fabric has no TLS; channel binding is empty (both sides agree, so handshakes work).
+    public byte[] LocalCertificateHash => [];
+
+    public byte[] RemoteCertificateHash => [];
+
     public async ValueTask SendAsync(Message message, CancellationToken cancellationToken)
     {
         // Round-trip through the real frame codec so in-memory tests exercise the actual wire

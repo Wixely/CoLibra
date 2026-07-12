@@ -36,6 +36,12 @@ internal interface IMessageChannel : IAsyncDisposable
 {
     EndPoint RemoteEndPoint { get; }
 
+    /// <summary>SHA-256 of the TLS certificate this side presented; empty for a non-TLS channel.</summary>
+    byte[] LocalCertificateHash { get; }
+
+    /// <summary>SHA-256 of the TLS certificate the peer presented; empty for a non-TLS channel.</summary>
+    byte[] RemoteCertificateHash { get; }
+
     ValueTask SendAsync(Message message, CancellationToken cancellationToken);
 
     /// <summary>Receives the next message; null when the channel is closed.</summary>

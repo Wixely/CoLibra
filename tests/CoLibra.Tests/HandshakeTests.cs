@@ -1,4 +1,5 @@
 using System.Net;
+using CoLibra.Protocol;
 using CoLibra.Security;
 using CoLibra.Transport;
 
@@ -6,6 +7,17 @@ namespace CoLibra.Tests;
 
 public class HandshakeTests
 {
+    // Wraps a channel to inject arbitrary TLS cert hashes (the real ones come from SslStream).
+    private sealed class BoundChannel(IMessageChannel inner, byte[] local, byte[] remote) : IMessageChannel
+    {
+        public EndPoint RemoteEndPoint => inner.RemoteEndPoint;
+        public byte[] LocalCertificateHash => local;
+        public byte[] RemoteCertificateHash => remote;
+        public ValueTask SendAsync(Message message, CancellationToken ct) => inner.SendAsync(message, ct);
+        public ValueTask<Message?> ReceiveAsync(CancellationToken ct) => inner.ReceiveAsync(ct);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
     private static (InMemoryChannel Client, InMemoryChannel Server) ChannelPair()
     {
         var hub = new InMemoryHub();
@@ -46,6 +58,43 @@ public class HandshakeTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await serverTask);
         await server.DisposeAsync(); // closes the pair so the waiting client fails fast
         await Assert.ThrowsAnyAsync<Exception>(async () => await clientTask);
+    }
+
+    [Fact]
+    public async Task Rejects_a_mitm_relaying_across_different_tls_certs()
+    {
+        // Both ends hold the shared secret (the attacker just relays the proofs), but the client saw
+        // the ATTACKER's cert while the server presented its OWN. The channel binding must reject it.
+        var keys = new ClusterKeys("svc", "secret");
+        var (client, server) = ChannelPair();
+        var ct = TestContext.Current.CancellationToken;
+
+        var boundServer = new BoundChannel(server, local: [1, 1, 1], remote: []);   // server presented cert 1,1,1
+        var boundClient = new BoundChannel(client, local: [], remote: [9, 9, 9]);   // client saw the MITM's cert
+
+        var serverTask = Handshake.AsServerAsync(boundServer, keys, NodeId.NewId(), 1, ct);
+        var clientTask = Handshake.AsClientAsync(boundClient, keys, NodeId.NewId(), 1, ct);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await serverTask);
+        await boundServer.DisposeAsync();
+        await Assert.ThrowsAnyAsync<Exception>(async () => await clientTask);
+    }
+
+    [Fact]
+    public async Task Accepts_a_matching_channel_binding()
+    {
+        var keys = new ClusterKeys("svc", "secret");
+        var (client, server) = ChannelPair();
+        var ct = TestContext.Current.CancellationToken;
+
+        // No MITM: the client saw exactly the cert the server presented.
+        var boundServer = new BoundChannel(server, local: [7, 7, 7], remote: []);
+        var boundClient = new BoundChannel(client, local: [], remote: [7, 7, 7]);
+
+        var serverTask = Handshake.AsServerAsync(boundServer, keys, NodeId.NewId(), 1, ct);
+        var clientTask = Handshake.AsClientAsync(boundClient, keys, NodeId.NewId(), 1, ct);
+        await serverTask;
+        await clientTask;
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Channels;
 using CoLibra.Protocol;
@@ -234,6 +235,12 @@ internal sealed class FramedMessageChannel(Stream stream, EndPoint remoteEndPoin
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     public EndPoint RemoteEndPoint { get; } = remoteEndPoint;
+
+    public byte[] LocalCertificateHash { get; } =
+        (stream as SslStream)?.LocalCertificate?.GetCertHash(HashAlgorithmName.SHA256) ?? [];
+
+    public byte[] RemoteCertificateHash { get; } =
+        (stream as SslStream)?.RemoteCertificate?.GetCertHash(HashAlgorithmName.SHA256) ?? [];
 
     public async ValueTask SendAsync(Message message, CancellationToken cancellationToken)
     {

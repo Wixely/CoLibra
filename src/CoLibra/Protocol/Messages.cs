@@ -2,7 +2,9 @@ namespace CoLibra.Protocol;
 
 internal static class ProtocolConstants
 {
-    public const byte ProtocolVersion = 1;
+    // v2: the mesh handshake proof is now bound to the TLS channel (server cert hash), which is not
+    // wire-compatible with v1 — a version mismatch is rejected cleanly at the frame layer.
+    public const byte ProtocolVersion = 2;
     public const int MaxFrameBytes = 4 * 1024 * 1024;
 }
 

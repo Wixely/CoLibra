@@ -26,11 +26,14 @@ internal static class Handshake
         if (await channel.ReceiveAsync(token).ConfigureAwait(false) is not HelloProofMessage proof)
             throw new InvalidDataException("Handshake: expected HelloProof.");
 
-        var expected = ComputeProof(keys.HandshakeKey, "client", serverNonce, proof.ClientNonce, proof.NodeId, proof.Incarnation);
+        // Channel binding: the cert WE presented over TLS. A relaying MITM would present its own cert
+        // to the client, so the client's binding would differ and its proof would not verify here.
+        var binding = channel.LocalCertificateHash;
+        var expected = ComputeProof(keys.HandshakeKey, "client", serverNonce, proof.ClientNonce, proof.NodeId, proof.Incarnation, binding);
         if (!CryptographicOperations.FixedTimeEquals(expected, proof.Proof))
-            throw new UnauthorizedAccessException("Handshake: client proof rejected (shared secret mismatch).");
+            throw new UnauthorizedAccessException("Handshake: client proof rejected (shared secret mismatch or MITM).");
 
-        var serverProof = ComputeProof(keys.HandshakeKey, "server", proof.ClientNonce, serverNonce, localId.Value, localIncarnation);
+        var serverProof = ComputeProof(keys.HandshakeKey, "server", proof.ClientNonce, serverNonce, localId.Value, localIncarnation, binding);
         await channel.SendAsync(new HelloAckMessage(localId.Value, localIncarnation, serverProof), token).ConfigureAwait(false);
 
         return (new NodeId(proof.NodeId), proof.Incarnation);
@@ -46,23 +49,26 @@ internal static class Handshake
         if (await channel.ReceiveAsync(token).ConfigureAwait(false) is not HelloChallengeMessage challenge)
             throw new InvalidDataException("Handshake: expected HelloChallenge.");
 
+        // Channel binding: the server cert WE saw over TLS. Under a relaying MITM this is the
+        // attacker's cert, not the real server's, so our proof won't verify at the real server.
+        var binding = channel.RemoteCertificateHash;
         var clientNonce = RandomNumberGenerator.GetBytes(32);
-        var clientProof = ComputeProof(keys.HandshakeKey, "client", challenge.ServerNonce, clientNonce, localId.Value, localIncarnation);
+        var clientProof = ComputeProof(keys.HandshakeKey, "client", challenge.ServerNonce, clientNonce, localId.Value, localIncarnation, binding);
         await channel.SendAsync(new HelloProofMessage(localId.Value, localIncarnation, clientNonce, clientProof), token).ConfigureAwait(false);
 
         if (await channel.ReceiveAsync(token).ConfigureAwait(false) is not HelloAckMessage ack)
             throw new InvalidDataException("Handshake: expected HelloAck.");
 
-        var expected = ComputeProof(keys.HandshakeKey, "server", clientNonce, challenge.ServerNonce, ack.NodeId, ack.Incarnation);
+        var expected = ComputeProof(keys.HandshakeKey, "server", clientNonce, challenge.ServerNonce, ack.NodeId, ack.Incarnation, binding);
         if (!CryptographicOperations.FixedTimeEquals(expected, ack.Proof))
             throw new UnauthorizedAccessException("Handshake: server proof rejected (shared secret mismatch).");
 
         return (new NodeId(ack.NodeId), ack.Incarnation);
     }
 
-    private static byte[] ComputeProof(byte[] key, string role, byte[] nonce1, byte[] nonce2, Guid nodeId, long incarnation)
+    private static byte[] ComputeProof(byte[] key, string role, byte[] nonce1, byte[] nonce2, Guid nodeId, long incarnation, byte[] binding)
     {
-        var material = new byte[role.Length + nonce1.Length + nonce2.Length + 16 + 8];
+        var material = new byte[role.Length + nonce1.Length + nonce2.Length + 16 + 8 + binding.Length];
         var offset = 0;
         foreach (var c in role)
             material[offset++] = (byte)c;
@@ -73,6 +79,8 @@ internal static class Handshake
         nodeId.TryWriteBytes(material.AsSpan(offset));
         offset += 16;
         BitConverter.TryWriteBytes(material.AsSpan(offset), incarnation);
+        offset += 8;
+        binding.CopyTo(material.AsSpan(offset));
         return HMACSHA256.HashData(key, material);
     }
 }
