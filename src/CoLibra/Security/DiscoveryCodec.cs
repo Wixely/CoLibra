@@ -83,8 +83,17 @@ internal sealed class DiscoveryCodec(ClusterKeys keys, string serviceId, TimePro
             _nonceExpiry.Enqueue((nonce, nowMs + (long)ReplayWindow.TotalMilliseconds));
         }
 
-        return CoLibraJsonContext.Resolver.Deserialize(
-            (MessageType)datagram[1],
-            datagram.Slice(bodyLenOffset + 4, bodyLength));
+        try
+        {
+            return CoLibraJsonContext.Resolver.Deserialize(
+                (MessageType)datagram[1],
+                datagram.Slice(bodyLenOffset + 4, bodyLength));
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Authenticated (HMAC passed) but unreadable — e.g. a version-skewed peer whose DTO shape
+            // changed. Ignore it rather than letting the exception kill the discovery pump.
+            return null;
+        }
     }
 }

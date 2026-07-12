@@ -20,9 +20,17 @@ internal sealed class SocketTransport : ITransport
     private readonly X509Certificate2 _certificate;
     private readonly ILogger _logger;
     private readonly IPAddress _multicastAddress;
+    // Bounds inbound work so an unauthenticated peer (TLS accepts any cert; the shared-secret
+    // handshake happens later) cannot exhaust memory/threads by flooding connections. Concurrent
+    // TLS handshakes are throttled and the queue of TLS-established-but-not-yet-authenticated
+    // channels is bounded; excess connections are shed and retried by the peer's discovery.
+    private const int MaxConcurrentInboundHandshakes = 128;
+
     private readonly Channel<ReceivedDatagram> _datagrams = Channel.CreateBounded<ReceivedDatagram>(
         new BoundedChannelOptions(1024) { FullMode = BoundedChannelFullMode.DropOldest });
-    private readonly Channel<IMessageChannel> _inbound = Channel.CreateUnbounded<IMessageChannel>();
+    private readonly Channel<IMessageChannel> _inbound = Channel.CreateBounded<IMessageChannel>(
+        new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });
+    private readonly SemaphoreSlim _inboundHandshakes = new(MaxConcurrentInboundHandshakes);
     private readonly CancellationTokenSource _stopping = new();
 
     private Socket? _udpSocket;
@@ -158,6 +166,16 @@ internal sealed class SocketTransport : ITransport
                 continue;
             }
 
+            // Shed the connection if we are already at the concurrent-handshake cap, rather than
+            // piling on unbounded TLS negotiations. A legitimate peer just retries via discovery.
+            if (!_inboundHandshakes.Wait(0, ct))
+            {
+                _logger.LogDebug("Inbound handshake cap reached; dropping connection from {Remote}",
+                    client.Client.RemoteEndPoint);
+                client.Dispose();
+                continue;
+            }
+
             _ = SecureInboundAsync(client, ct);
         }
     }
@@ -178,12 +196,22 @@ internal sealed class SocketTransport : ITransport
                 ClientCertificateRequired = false,
                 RemoteCertificateValidationCallback = static (_, _, _, _) => true,
             }, timeout.Token).ConfigureAwait(false);
-            _inbound.Writer.TryWrite(new FramedMessageChannel(ssl, remote));
+            if (!_inbound.Writer.TryWrite(new FramedMessageChannel(ssl, remote)))
+            {
+                // Queue full (consumer backpressured): shed rather than block the accept path.
+                _logger.LogDebug("Inbound queue full; dropping connection from {Remote}", remote);
+                await ssl.DisposeAsync().ConfigureAwait(false);
+                client.Dispose();
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _logger.LogDebug(ex, "Inbound TLS negotiation failed");
             client.Dispose();
+        }
+        finally
+        {
+            _inboundHandshakes.Release();
         }
     }
 
@@ -194,6 +222,7 @@ internal sealed class SocketTransport : ITransport
         _udpSocket?.Dispose();
         _datagrams.Writer.TryComplete();
         _inbound.Writer.TryComplete();
+        _inboundHandshakes.Dispose();
         _stopping.Dispose();
         return ValueTask.CompletedTask;
     }
@@ -225,8 +254,11 @@ internal sealed class FramedMessageChannel(Stream stream, EndPoint remoteEndPoin
         {
             return await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException
+            or InvalidDataException or System.Text.Json.JsonException)
         {
+            // A malformed or unreadable frame poisons only this connection (return null closes it),
+            // never the read pump — including bad JSON from an authenticated peer with a stale DTO.
             return null;
         }
     }

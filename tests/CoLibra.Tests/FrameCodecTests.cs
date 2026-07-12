@@ -86,4 +86,22 @@ public class FrameCodecTests
         await Assert.ThrowsAsync<InvalidDataException>(async () =>
             await FrameCodec.ReadAsync(stream, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task Rejects_hybrid_frame_with_overflowing_header_length()
+    {
+        // A hostile hybrid header length near int.MaxValue must be rejected cleanly, not overflow
+        // `6 + headerLength` into a negative that slips past the bound check (then over-reads).
+        var body = new byte[10];
+        body[0] = ProtocolConstants.ProtocolVersion;
+        body[1] = 64; // RoutedPayload -> hybrid decode path
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), int.MaxValue);
+        var frame = new byte[4 + body.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(frame, body.Length);
+        body.CopyTo(frame, 4);
+
+        using var stream = new MemoryStream(frame);
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await FrameCodec.ReadAsync(stream, TestContext.Current.CancellationToken));
+    }
 }

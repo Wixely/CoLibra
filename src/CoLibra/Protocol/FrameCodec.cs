@@ -86,9 +86,13 @@ internal static class FrameCodec
     private static Message DecodeHybrid(byte[] body)
     {
         // body = [1B ver][1B type][4B header length][JSON header][raw payload]
+        if (body.Length < 6)
+            throw new InvalidDataException("Hybrid frame too short.");
         var type = (MessageType)body[1];
         var headerLength = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2));
-        if (headerLength < 2 || 6 + headerLength > body.Length)
+        // Compare via subtraction (body.Length is >= 6 here) so a hostile length near int.MaxValue
+        // cannot overflow `6 + headerLength` into a negative that slips past the bound check.
+        if (headerLength < 2 || headerLength > body.Length - 6)
             throw new InvalidDataException($"Invalid hybrid-frame header length {headerLength}.");
 
         var header = CoLibraJsonContext.Resolver.Deserialize(type, body.AsSpan(6, headerLength))
