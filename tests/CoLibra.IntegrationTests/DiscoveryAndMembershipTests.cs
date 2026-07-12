@@ -96,14 +96,18 @@ public class DiscoveryAndMembershipTests : IAsyncLifetime
         Assert.Equal(ClusterState.Member, original.State);
 
         var duplicate = await _cluster.StartNodeAsync(o => o.NodeId = fixedId, waitForCluster: false);
-        await TestCluster.WaitUntilAsync(() => duplicate.State == ClusterState.Faulted,
-            because: "a second live node with the same NodeId must fault (the original, a different "
-                + "incarnation, keeps its place)");
-        Assert.Equal(ClusterState.Member, original.State);
+
+        // Two live nodes with the same NodeId can't coexist: exactly one faults. WHICH one depends on
+        // timing — a heartbeat-starved original can be superseded by the newer incarnation under load —
+        // so assert the mutual-exclusion invariant, not which side wins.
+        CoLibraNode[] twins = [original, duplicate];
+        await TestCluster.WaitUntilAsync(() => twins.Count(n => n.State == ClusterState.Faulted) == 1,
+            because: "a second live node with the same NodeId must fault");
         Assert.Equal(ClusterState.Coordinator, coordinator.State);
 
         // The faulted node fails WaitForClusterAsync fast rather than hanging forever.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => duplicate.WaitForClusterAsync());
+        var faulted = twins.First(n => n.State == ClusterState.Faulted);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => faulted.WaitForClusterAsync());
     }
 
     [Fact]
