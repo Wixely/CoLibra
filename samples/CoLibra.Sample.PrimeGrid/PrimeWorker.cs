@@ -87,7 +87,12 @@ internal sealed class PrimeWorker(
                 }
 
                 // Wait for freed buckets (or just re-check periodically; denied answers are cached).
-                await Task.WhenAny(rescan.WaitAsync(stoppingToken), Task.Delay(TimeSpan.FromSeconds(3), stoppingToken));
+                // Cancel the loser of the race so we don't abandon a SemaphoreSlim waiter each poll —
+                // an abandoned waiter would consume the next Release, swallowing the wake-up (and they
+                // accumulate).
+                using var wake = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                await Task.WhenAny(rescan.WaitAsync(wake.Token), Task.Delay(TimeSpan.FromSeconds(3), wake.Token));
+                wake.Cancel();
             }
         }
         catch (OperationCanceledException)

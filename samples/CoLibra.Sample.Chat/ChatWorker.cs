@@ -121,6 +121,14 @@ internal sealed class ChatWorker(
         while (!ct.IsCancellationRequested)
         {
             var input = await Task.Run(Console.ReadLine, ct);
+            if (input is null)
+            {
+                // stdin is closed (EOF / Ctrl+Z): stop reading rather than spinning on repeated nulls,
+                // which would peg a CPU core. The node stays connected and keeps receiving messages.
+                logger.LogInformation("Input closed; no longer reading. Press Ctrl+C to exit.");
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(input))
                 continue;
 

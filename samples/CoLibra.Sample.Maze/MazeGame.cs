@@ -61,10 +61,12 @@ internal sealed class MazeGame(
         });
 
         await BootstrapMapAsync(mapReady, stoppingToken);
+        if (_maze is null)
+            return; // cancelled during bootstrap (shutdown) — nothing to spawn into
 
         // Spawn at a random open cell and announce ourselves.
         var random = new Random();
-        (_x, _y) = _maze!.RandomOpenCell(random);
+        (_x, _y) = _maze.RandomOpenCell(random);
         _players[settings.Name] = new PlayerState(settings.Name, _x, _y);
         await BroadcastPositionAsync(stoppingToken);
         logger.LogInformation("Spawned at ({X},{Y}) in the {W}x{H} maze", _x, _y, _maze.Width, _maze.Height);
@@ -210,7 +212,15 @@ internal sealed class MazeGame(
                 if (_dirty && _maze is not null && !Console.IsInputRedirected)
                 {
                     _dirty = false;
-                    Render();
+                    try
+                    {
+                        Render();
+                    }
+                    catch (Exception ex)
+                    {
+                        // A single bad frame must never freeze the console; drop it and keep going.
+                        logger.LogDebug(ex, "Render frame failed");
+                    }
                 }
 
                 await Task.Delay(40, ct); // ~25 fps cap
