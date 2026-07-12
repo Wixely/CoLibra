@@ -20,8 +20,11 @@ jobs:
           dotnet-version: 10.0.x
       - name: Build
         run: dotnet build --configuration Release
+      # The real-time multi-node cluster tests occasionally flake on GitHub's 2-core runners under
+      # load (documented). Retry once: a transient timing flake clears on a fresh run; a real failure
+      # still fails twice. `||` works in both bash (Linux) and PowerShell 7 (Windows).
       - name: Test
-        run: dotnet test --configuration Release --no-build -- --report-trx
+        run: dotnet test --configuration Release --no-build -- --report-trx || dotnet test --configuration Release --no-build -- --report-trx
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4

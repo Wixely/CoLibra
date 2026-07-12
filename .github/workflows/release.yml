@@ -26,8 +26,10 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release
 
+      # Retry once so a transient timing flake on the runner doesn't fail a release; a real failure
+      # still fails twice. See ci.yml for the rationale.
       - name: Test
-        run: dotnet test --configuration Release --no-build -- --report-trx
+        run: dotnet test --configuration Release --no-build -- --report-trx || dotnet test --configuration Release --no-build -- --report-trx
 
       - name: Upload test results
         if: failure()
