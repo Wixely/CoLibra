@@ -43,9 +43,11 @@ MIT licensed. One package, no third-party dependencies.
 
   The NuGet package is the recommended route — it wires those dependencies up for you.
 
-**From source**: `dotnet pack src/CoLibra/CoLibra.csproj -c Release -o out` and consume the resulting nupkg the same way.
+- `CoLibra-Samples-X.Y.Z-win-x64.zip` / `-linux-x64.zip` — the seven demos as standalone executables: self-contained, trimmed and single-file, so they run on a machine with no .NET installed. Unzip, start two or three copies, and watch them find each other.
 
-**Cutting a release** (maintainers): tag the commit and push the tag — the [Release workflow](.github/workflows/release.yml) builds, runs the full test suite, and attaches both artifacts to a GitHub Release, versioned from the tag:
+**From source**: `dotnet pack src/CoLibra/CoLibra.csproj -c Release -o out` and consume the resulting nupkg the same way. `dotnet publish samples/CoLibra.Sample.Chat -r <rid>` builds a sample the same way the release does — the publish settings live in [samples/Directory.Build.props](samples/Directory.Build.props).
+
+**Cutting a release** (maintainers): tag the commit and push the tag — the [Release workflow](.github/workflows/release.yml) builds, runs the full test suite, publishes and smoke-tests the standalone sample executables, and attaches every artifact to a GitHub Release, versioned from the tag:
 
 ```
 git tag v0.2.0
@@ -167,7 +169,7 @@ await using var reg = cluster.Router.RegisterHandler<OrderUpdate>("order", (deli
 await cluster.Router.RouteAsync("order", orderId, new OrderUpdate("main", 3.75m, DateTimeOffset.UtcNow));
 ```
 
-The default serializer is System.Text.Json (no extra dependencies; pass your own `JsonSerializerOptions` — e.g. a source-generated resolver for Native AOT — via `new JsonPayloadSerializer(options)`). To use MessagePack, MemoryPack or anything else, implement the two-method `IRoutedPayloadSerializer` and assign `options.Routing.PayloadSerializer`; all nodes must agree on it. Raw `byte[]`/`ReadOnlyMemory<byte>` overloads always bypass the serializer — ideal for forwarding already-encoded messages without a decode/re-encode cycle.
+The default serializer is System.Text.Json (no extra dependencies; pass your own `JsonSerializerOptions` — e.g. a source-generated resolver — via `new JsonPayloadSerializer(options)`). **Trimmed and Native AOT apps should do exactly that**: with no resolver the serializer falls back to reflection, which the trimmer cannot follow, and a payload member it removed goes missing silently. Build with `<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>` and the fallback is trimmed away entirely, so a forgotten `[JsonSerializable]` throws instead — that is how the [samples](samples/Directory.Build.props) are published. To use MessagePack, MemoryPack or anything else, implement the two-method `IRoutedPayloadSerializer` and assign `options.Routing.PayloadSerializer`; all nodes must agree on it. Raw `byte[]`/`ReadOnlyMemory<byte>` overloads always bypass the serializer — ideal for forwarding already-encoded messages without a decode/re-encode cycle.
 
 If the key already has an owner, the payload goes there (in-process when it's you, over a pooled direct TLS channel otherwise, relayed via the coordinator as fallback). If the key is **unowned**, the coordinator force-assigns the lease to the least-loaded node that registered a handler for the type — the one deliberate exception to pull-only grants, safe because a registered handler proves the assignee can process. The first route for a key pays that assignment round-trip; after that the owner is cached locally. Delivery is at-least-once with acknowledgments: on `Timeout` you may retry and the handler may see a duplicate — `delivery.Token` (the fencing token) is provided for idempotency. Payloads travel as raw bytes (never base64) up to `MaxPayloadBytes`. See the [Router sample](samples/CoLibra.Sample.Router/).
 

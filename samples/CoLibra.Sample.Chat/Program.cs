@@ -1,4 +1,5 @@
-﻿using CoLibra.Messaging.LiteNetLib;
+﻿using System.Text.Json;
+using CoLibra.Messaging.LiteNetLib;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -55,6 +56,8 @@ internal static class Program
             options.ServiceVersion = new Version(1, 0, 0);
             options.NodeName = name;
             options.Messaging.Enabled = true;
+            options.Messaging.PayloadSerializer = new JsonPayloadSerializer(
+                new JsonSerializerOptions { TypeInfoResolver = ChatJsonContext.Default });
             options.Messaging.PreferUdp = udp;
             options.MemberTimeout = TimeSpan.FromSeconds(3);
         });

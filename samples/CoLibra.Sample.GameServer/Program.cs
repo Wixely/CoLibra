@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -51,6 +52,8 @@ internal static class Program
             options.ServiceVersion = new Version(1, 0, 0);
             options.NodeName = name;
             options.Messaging.Enabled = true;
+            options.Messaging.PayloadSerializer = new JsonPayloadSerializer(
+                new JsonSerializerOptions { TypeInfoResolver = GameJsonContext.Default });
             options.MemberTimeout = TimeSpan.FromSeconds(3);
             options.LeaseTtl = TimeSpan.FromSeconds(6);
             options.LeaseRenewSafetyMargin = TimeSpan.FromSeconds(2);

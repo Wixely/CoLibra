@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -37,6 +38,8 @@ internal static class Program
             options.SharedSecret = "router-demo-secret-change-me";
             options.ServiceVersion = new Version(1, 0, 0);
             options.Routing.Enabled = true;
+            options.Routing.PayloadSerializer = new JsonPayloadSerializer(
+                new JsonSerializerOptions { TypeInfoResolver = OrderJsonContext.Default });
 
             // Snappier demo timings than the production defaults.
             options.LeaseTtl = TimeSpan.FromSeconds(6);

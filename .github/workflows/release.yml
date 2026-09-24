@@ -1,7 +1,8 @@
 name: Release
 
 # Tag a commit vX.Y.Z (e.g. `git tag v0.2.0 && git push origin v0.2.0`) and this workflow
-# builds, tests, packs the NuGet package and a DLL zip, and attaches both to a GitHub Release.
+# builds, tests, packs the NuGet packages, a DLL zip and the per-platform standalone sample
+# executables, and attaches them all to a GitHub Release.
 on:
   push:
     tags: ['v*.*.*']
@@ -56,20 +57,27 @@ jobs:
           mkdir -p artifacts
           (cd publish && zip "../artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip" CoLibra.dll CoLibra.pdb CoLibra.xml CoLibra.Messaging.LiteNetLib.dll CoLibra.Messaging.LiteNetLib.xml LICENSE README.md THIRD-PARTY-NOTICES.txt)
 
-      - name: Publish samples bundle (win-x64 single-file executables)
+      - name: Publish samples bundles (standalone trimmed executables)
         run: |
-          # One self-sufficient .exe per demo (all managed deps bundled inside; needs only the
-          # .NET 10 runtime), plus each sample's named editable config beside it.
-          for sample in Worker PrimeGrid Router Chat GameServer Maze HostedMaze; do
-            dotnet publish "samples/CoLibra.Sample.$sample/CoLibra.Sample.$sample.csproj" \
-              --configuration Release -p:Version=${{ env.VERSION }} \
-              --runtime win-x64 --self-contained false \
-              -p:PublishSingleFile=true -p:DebugType=none \
-              --output samples-publish
+          # One standalone .exe per demo per platform: self-contained, trimmed and single-file, so a
+          # machine with no .NET installed can run them. Those switches live in samples/Directory.Build.props
+          # (a local `dotnet publish -r <rid>` therefore produces exactly what ships here).
+          for rid in win-x64 linux-x64; do
+            for sample in Worker PrimeGrid Router Chat GameServer Maze HostedMaze; do
+              dotnet publish "samples/CoLibra.Sample.$sample/CoLibra.Sample.$sample.csproj" --configuration Release -p:Version=${{ env.VERSION }} --runtime "$rid" -p:DebugType=none --output "samples-publish/$rid"
+            done
+            rm -f "samples-publish/$rid"/*.xml
+            cp samples/SAMPLES-README.txt LICENSE THIRD-PARTY-NOTICES.txt "samples-publish/$rid/"
+            (cd "samples-publish/$rid" && zip -r "$GITHUB_WORKSPACE/artifacts/CoLibra-Samples-${{ env.VERSION }}-$rid.zip" .)
           done
-          rm -f samples-publish/*.xml
-          cp samples/SAMPLES-README.txt LICENSE THIRD-PARTY-NOTICES.txt samples-publish/
-          (cd samples-publish && zip -r "../artifacts/CoLibra-Samples-${{ env.VERSION }}-win-x64.zip" .)
+
+      - name: Smoke-test a published executable
+        run: |
+          # Trimming fails at runtime, not at build time: run one of the shipped binaries and insist
+          # it actually routed and deserialized payloads, so a trimmed-away type can't reach a release.
+          timeout 25s ./samples-publish/linux-x64/CoLibra.Sample.Router > router.log 2>&1 || true
+          cat router.log
+          grep -Eq 'processed [1-9]' router.log
 
       - name: Create GitHub Release
         env:
@@ -80,6 +88,7 @@ jobs:
           artifacts/CoLibra.Messaging.LiteNetLib.${{ env.VERSION }}.nupkg
           "artifacts/CoLibra-${{ env.VERSION }}-net10.0.zip"
           "artifacts/CoLibra-Samples-${{ env.VERSION }}-win-x64.zip"
+          "artifacts/CoLibra-Samples-${{ env.VERSION }}-linux-x64.zip"
           --title "CoLibra ${{ env.VERSION }}"
           --generate-notes
 

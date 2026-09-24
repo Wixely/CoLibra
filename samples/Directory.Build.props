@@ -1,0 +1,23 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- The samples ship as standalone, trimmed, single-file executables (see .github/workflows/release.yml).
+       Everything here also applies to a local `dotnet publish -r <rid>`, so what you test is what ships. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>true</PublishTrimmed>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- No reflection-based System.Text.Json anywhere in these apps: each sample registers its
+         payloads in a source-generated JsonSerializerContext, so the trimmer can drop the reflection
+         machinery outright instead of leaving members it cannot prove are used. Kept on for ordinary
+         `dotnet run` too, so a missing [JsonSerializable] fails in dev rather than only in the
+         published executable. -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+</Project>

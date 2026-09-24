@@ -1,17 +1,21 @@
 CoLibra sample applications
 ===========================
 
-Five runnable demos of CoLibra's decentralized discovery and work negotiation,
-each a single self-sufficient Windows executable (all libraries bundled inside).
-Instances discover each other automatically on the same LAN (UDP multicast) -
-just start several copies, on one machine or many.
+Seven runnable demos of CoLibra's decentralized discovery and work negotiation,
+each a single standalone executable - the .NET runtime and every library are
+bundled inside, so nothing needs installing. Instances discover each other
+automatically on the same LAN (UDP multicast) - just start several copies, on
+one machine or many.
 
-Requires the .NET 10 runtime: https://dotnet.microsoft.com/download
-(Other platforms: build from source - `dotnet publish -r linux-x64` works too.)
+Each release carries one zip per platform (win-x64, linux-x64); on Linux the
+executables are the same names without the .exe, and need `chmod +x` after
+unzipping. Other platforms: build from source, e.g.
+`dotnet publish samples/CoLibra.Sample.Chat -r osx-arm64`.
 
-Configuration: chat.json / gameserver.json / primegrid.json hold each demo's
-settings (deliberately distinct names so all demos coexist in this one folder).
-Command-line arguments override the files, e.g. `--Name alice`.
+Configuration: chat.json / gameserver.json / primegrid.json / maze.json /
+hostedmaze.json hold each demo's settings (deliberately distinct names so all
+demos coexist in this one folder). Command-line arguments override the files,
+e.g. `--Name alice`.
 
 CoLibra.Sample.Worker.exe
     The hello-world: 8 work sources split across however many instances you

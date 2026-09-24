@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -43,6 +44,8 @@ internal static class Program
             options.ServiceVersion = new Version(1, 0, 0);
             options.NodeName = name;
             options.Messaging.Enabled = true;
+            options.Messaging.PayloadSerializer = new JsonPayloadSerializer(
+                new JsonSerializerOptions { TypeInfoResolver = MazeJsonContext.Default });
             // Snappy host migration: detect a dead host and elect a successor within ~1-2 s.
             // AnnounceInterval must be shorter than DiscoveryWindow so a joiner hears the current
             // host and joins it cleanly instead of briefly self-promoting.
